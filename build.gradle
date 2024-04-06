@@ -38,7 +38,7 @@ dependencies {
     runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
 
     testImplementation 'com.linecorp.armeria:armeria-junit5'
-    testImplementation 'net.javacrumbs.json-unit:json-unit-fluent:2.38.0'
+    testImplementation 'net.javacrumbs.json-unit:json-unit-fluent:3.2.7'
     testImplementation 'org.assertj:assertj-core:3.25.3'
     testImplementation 'org.junit.jupiter:junit-jupiter-api'
 }
