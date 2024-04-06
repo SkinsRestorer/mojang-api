@@ -47,7 +47,7 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
         h -> {
           h.set(HttpHeaderNames.ACCEPT, "application/json");
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
-          h.set(HttpHeaderNames.USER_AGENT, "SkinsRestorerMojangProxy");
+          h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
       .get()
       .uri(PROXY_ENDPOINT)
@@ -65,7 +65,9 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
                 response.socks5.forEach(
                     host -> proxyList.add(createTypeSpec(host, ProxyType.SOCKS5)));
                 response.http.forEach(
-                    host -> proxyList.add(createTypeSpec(host, ProxyType.HTTP)));
+                  host -> proxyList.add(createTypeSpec(host, ProxyType.HTTP)));
+                response.https.forEach(
+                  host -> proxyList.add(createTypeSpec(host, ProxyType.HTTPS)));
 
                 return proxyList;
               }))
@@ -83,11 +85,11 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
     crawlExecutor.shutdown();
   }
 
-  private record ProxyResponse(List<String> socks4, List<String> socks5, List<String> http) {
+  private record ProxyResponse(List<String> socks4, List<String> socks5, List<String> http, List<String> https) {
   }
 
   private enum ProxyType {
-    SOCKS4, SOCKS5, HTTP
+    SOCKS4, SOCKS5, HTTP, HTTPS
   }
 
   private static Consumer<ProxyProvider.TypeSpec> createTypeSpec(String info, ProxyType type) {
@@ -98,7 +100,7 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
     return spec -> {
       spec.type(
         switch (type) {
-          case HTTP -> ProxyProvider.Proxy.HTTP;
+          case HTTP, HTTPS -> ProxyProvider.Proxy.HTTP;
           case SOCKS4 -> ProxyProvider.Proxy.SOCKS4;
           case SOCKS5 -> ProxyProvider.Proxy.SOCKS5;
         })

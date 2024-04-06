@@ -12,14 +12,21 @@ public class Main {
   private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
   public static void main(String[] args) {
-    final Server server = newServer(8080);
+    try (var databaseManager = new DatabaseManager();
+         var proxyProvider = new MojangProxyProvider()) {
+      final Server server = newServer(8080, databaseManager, proxyProvider);
 
-    server.closeOnJvmShutdown();
+      server.closeOnJvmShutdown();
 
-    server.start().join();
+      server.start().join();
 
-    logger.info("Server has been started. Serving DocService at http://127.0.0.1:{}/docs",
-      server.activeLocalPort());
+      logger.info("Server has been started. Serving DocService at http://127.0.0.1:{}/docs",
+        server.activeLocalPort());
+
+      server.blockUntilShutdown();
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
@@ -28,15 +35,15 @@ public class Main {
    * @param port the port that the server is to be bound to
    */
   @SuppressWarnings("SameParameterValue")
-  private static Server newServer(int port) {
+  private static Server newServer(int port, DatabaseManager databaseManager, MojangProxyProvider proxyProvider) {
     final ServerBuilder sb = Server.builder();
     sb.http(port);
-    configureServices(sb);
+    configureServices(sb, databaseManager, proxyProvider);
     return sb.build();
   }
 
-  static void configureServices(ServerBuilder sb) {
-    sb.annotatedService("/mojang", new MojangAPIProxyService())
+  static void configureServices(ServerBuilder sb, DatabaseManager databaseManager, MojangProxyProvider proxyProvider) {
+    sb.annotatedService("/mojang", new MojangAPIProxyService(databaseManager, proxyProvider))
       .service("/", new RedirectService("/docs"))
       .serviceUnder("/docs",
         DocService.builder()
@@ -45,7 +52,7 @@ public class Main {
             "/mojang/uuid/Pistonmaster")
           .examplePaths(MojangAPIProxyService.class,
             "uuidToProfile",
-            "/mojang/profile/b1ae0778-4817-436c-96a3-a72c67cda060")
+            "/mojang/skin/b1ae0778-4817-436c-96a3-a72c67cda060")
           .build());
   }
 }
