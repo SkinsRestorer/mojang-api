@@ -40,6 +40,7 @@ dependencies {
   runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
   implementation "io.projectreactor.netty:reactor-netty-core:1.1.17"
   implementation "io.projectreactor.netty:reactor-netty-http:1.1.17"
+  implementation 'com.google.code.gson:gson:2.10.1'
 
   testImplementation 'com.linecorp.armeria:armeria-junit5'
   testImplementation 'net.javacrumbs.json-unit:json-unit-fluent:3.2.7'
