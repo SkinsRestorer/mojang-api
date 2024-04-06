@@ -18,23 +18,23 @@
 package net.skinsrestorer.mojangapi;
 
 public class ValidationUtil {
-    private ValidationUtil() {
+  private ValidationUtil() {
+  }
+
+  public static boolean invalidMinecraftUsername(String str) {
+    // Note: there are exceptions to players with under 3 characters, who bought the game early in its development.
+    if (str.length() > 16) {
+      return true;
     }
 
-    public static boolean invalidMinecraftUsername(String str) {
-        // Note: there are exceptions to players with under 3 characters, who bought the game early in its development.
-        if (str.length() > 16) {
-            return true;
-        }
-
-        // For some reason, Apache's Lists.charactersOf is faster than character indexing for small strings.
-        for (char c : str.toCharArray()) {
-            // Note: Players who bought the game early in its development can have "-" in usernames.
-            if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'Z') && c != '_' && c != '-') {
-                return true;
-            }
-        }
-
-        return false;
+    // For some reason, Apache's Lists.charactersOf is faster than character indexing for small strings.
+    for (char c : str.toCharArray()) {
+      // Note: Players who bought the game early in its development can have "-" in usernames.
+      if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'Z') && c != '_' && c != '-') {
+        return true;
+      }
     }
+
+    return false;
+  }
 }

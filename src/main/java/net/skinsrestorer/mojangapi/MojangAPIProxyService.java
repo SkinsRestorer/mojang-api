@@ -13,56 +13,56 @@ import java.util.Optional;
 import java.util.UUID;
 
 @LoggingDecorator(
-        requestLogLevel = LogLevel.INFO,
-        successfulResponseLogLevel = LogLevel.INFO
+  requestLogLevel = LogLevel.INFO,
+  successfulResponseLogLevel = LogLevel.INFO
 )
 @CorsDecorator(origins = "*", allowedRequestMethods = HttpMethod.GET, credentialsAllowed = true, allowAllRequestHeaders = true)
 public class MojangAPIProxyService {
-    @Get("/uuid/{name}")
-    public HttpResponse nameToUUID(@Param String name) {
-        if (ValidationUtil.invalidMinecraftUsername(name)) {
-            return HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_NAME));
-        }
-
-        return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(new CacheData(CacheState.MISS, 0), UUID.randomUUID()));
+  @Get("/uuid/{name}")
+  public HttpResponse nameToUUID(@Param String name) {
+    if (ValidationUtil.invalidMinecraftUsername(name)) {
+      return HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_NAME));
     }
 
-    @Get("/profile/{uuid}")
-    public HttpResponse uuidToProfile(@Param String uuid) {
-        Optional<UUID> optionalUUID = UUIDUtils.tryParseUniqueId(uuid);
-        if (optionalUUID.isEmpty()) {
-            return HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID));
-        }
+    return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(new CacheData(CacheState.MISS, 0), UUID.randomUUID()));
+  }
 
-        return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, 0), new ProfileResponse.SkinProperty("value", "signature")));
+  @Get("/profile/{uuid}")
+  public HttpResponse uuidToProfile(@Param String uuid) {
+    Optional<UUID> optionalUUID = UUIDUtils.tryParseUniqueId(uuid);
+    if (optionalUUID.isEmpty()) {
+      return HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID));
     }
 
-    public record ErrorResponse(ErrorType error) {
-        public enum ErrorType {
-            INVALID_NAME,
-            INVALID_UUID
-        }
-    }
+    return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, 0), new ProfileResponse.SkinProperty("value", "signature")));
+  }
 
-    public record UUIDResponse(CacheData cacheData, UUID uuid) {
-    }
+  public enum CacheState {
+    HIT,
+    MISS
+  }
 
-    public record ProfileResponse(CacheData cacheData, SkinProperty skinProperty) {
-        public record SkinProperty(
-                String value,
-                String signature
-        ) {
-        }
+  public record ErrorResponse(ErrorType error) {
+    public enum ErrorType {
+      INVALID_NAME,
+      INVALID_UUID
     }
+  }
 
-    public record CacheData(
-            CacheState state,
-            long expirationTime
+  public record UUIDResponse(CacheData cacheData, UUID uuid) {
+  }
+
+  public record ProfileResponse(CacheData cacheData, SkinProperty skinProperty) {
+    public record SkinProperty(
+      String value,
+      String signature
     ) {
     }
+  }
 
-    public enum CacheState {
-        HIT,
-        MISS
-    }
+  public record CacheData(
+    CacheState state,
+    long expirationTime
+  ) {
+  }
 }

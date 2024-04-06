@@ -1,27 +1,30 @@
 plugins {
-    id 'application'
-    id 'java'
-    id 'eclipse'
-    id 'idea'
-    id "io.spring.dependency-management" version "1.1.4"
+  id 'application'
+  id 'java'
+  id 'eclipse'
+  id 'idea'
+  id "io.spring.dependency-management" version "1.1.4"
+  id "io.freefair.lombok" version "5.1.0"
 }
 
 repositories {
-    mavenCentral()
+  maven { url 'https://repo.spring.io/milestone' }
+  mavenCentral()
 }
 
 dependencyManagement {
-    imports {
-        mavenBom 'io.micrometer:micrometer-bom:1.12.4'
-        mavenBom 'io.netty:netty-bom:4.1.108.Final'
-        mavenBom 'com.linecorp.armeria:armeria-bom:1.27.3'
-        mavenBom 'org.junit:junit-bom:5.10.2'
-        mavenBom 'io.github.resilience4j:resilience4j-bom:2.2.0'
-    }
+  imports {
+    mavenBom 'io.micrometer:micrometer-bom:1.12.4'
+    mavenBom 'io.netty:netty-bom:4.1.108.Final'
+    mavenBom 'com.linecorp.armeria:armeria-bom:1.27.3'
+    mavenBom 'org.junit:junit-bom:5.10.2'
+    mavenBom 'io.github.resilience4j:resilience4j-bom:2.2.0'
+  }
 }
 
 dependencies {
   implementation 'com.google.code.findbugs:jsr305:3.0.2'
+
   testImplementation 'junit:junit:4.13.2'
   testImplementation 'org.assertj:assertj-core:3.25.3'
   testImplementation 'org.junit.jupiter:junit-jupiter-api'
@@ -33,28 +36,30 @@ dependencies {
 }
 
 dependencies {
-    implementation 'com.linecorp.armeria:armeria'
-    runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
+  implementation 'com.linecorp.armeria:armeria'
+  runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
+  implementation "io.projectreactor.netty:reactor-netty-core:1.1.17"
+  implementation "io.projectreactor.netty:reactor-netty-http:1.1.17"
 
-    testImplementation 'com.linecorp.armeria:armeria-junit5'
-    testImplementation 'net.javacrumbs.json-unit:json-unit-fluent:3.2.7'
-    testImplementation 'org.assertj:assertj-core:3.25.3'
-    testImplementation 'org.junit.jupiter:junit-jupiter-api'
+  testImplementation 'com.linecorp.armeria:armeria-junit5'
+  testImplementation 'net.javacrumbs.json-unit:json-unit-fluent:3.2.7'
+  testImplementation 'org.assertj:assertj-core:3.25.3'
+  testImplementation 'org.junit.jupiter:junit-jupiter-api'
 }
 
 application {
-    mainClass.set('net.skinsrestorer.mojangapi.Main')
+  mainClass.set('net.skinsrestorer.mojangapi.Main')
 }
 
-tasks.withType(JavaCompile) {
-    sourceCompatibility = '21'
-    targetCompatibility = '21'
-    options.encoding = 'UTF-8'
-    options.debug = true
-    options.compilerArgs += '-parameters'
+tasks.withType(JavaCompile).configureEach {
+  sourceCompatibility = '21'
+  targetCompatibility = '21'
+  options.encoding = 'UTF-8'
+  options.debug = true
+  options.compilerArgs += '-parameters'
 }
 
-tasks.withType(Test) {
-    useJUnitPlatform()
+tasks.withType(Test).configureEach {
+  useJUnitPlatform()
 }
 
