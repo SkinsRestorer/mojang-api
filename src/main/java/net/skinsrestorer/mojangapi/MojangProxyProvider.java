@@ -63,7 +63,7 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
                 response.socks4.forEach(
                   host -> proxyList.add(createTypeSpec(host, ProxyType.SOCKS4)));
                 response.socks5.forEach(
-                    host -> proxyList.add(createTypeSpec(host, ProxyType.SOCKS5)));
+                  host -> proxyList.add(createTypeSpec(host, ProxyType.SOCKS5)));
                 response.http.forEach(
                   host -> proxyList.add(createTypeSpec(host, ProxyType.HTTP)));
                 response.https.forEach(
@@ -72,6 +72,25 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
                 return proxyList;
               }))
       .block();
+  }
+
+  private static Consumer<ProxyProvider.TypeSpec> createTypeSpec(String info, ProxyType type) {
+    var split = info.split(":");
+    var host = split[0];
+    var port = Integer.parseInt(split[1]);
+
+    return spec -> {
+      spec.type(
+          switch (type) {
+            case HTTP, HTTPS -> ProxyProvider.Proxy.HTTP;
+            case SOCKS4 -> ProxyProvider.Proxy.SOCKS4;
+            case SOCKS5 -> ProxyProvider.Proxy.SOCKS5;
+          })
+        .host(host)
+        .port(port)
+        .nonProxyHosts("localhost")
+        .connectTimeoutMillis(20_000);
+    };
   }
 
   @Override
@@ -85,29 +104,10 @@ public class MojangProxyProvider implements Supplier<Consumer<ProxyProvider.Type
     crawlExecutor.shutdown();
   }
 
-  private record ProxyResponse(List<String> socks4, List<String> socks5, List<String> http, List<String> https) {
-  }
-
   private enum ProxyType {
     SOCKS4, SOCKS5, HTTP, HTTPS
   }
 
-  private static Consumer<ProxyProvider.TypeSpec> createTypeSpec(String info, ProxyType type) {
-    var split = info.split(":");
-    var host = split[0];
-    var port = Integer.parseInt(split[1]);
-
-    return spec -> {
-      spec.type(
-        switch (type) {
-          case HTTP, HTTPS -> ProxyProvider.Proxy.HTTP;
-          case SOCKS4 -> ProxyProvider.Proxy.SOCKS4;
-          case SOCKS5 -> ProxyProvider.Proxy.SOCKS5;
-        })
-        .host(host)
-        .port(port)
-        .nonProxyHosts("localhost")
-        .connectTimeoutMillis(20_000);
-    };
+  private record ProxyResponse(List<String> socks4, List<String> socks5, List<String> http, List<String> https) {
   }
 }

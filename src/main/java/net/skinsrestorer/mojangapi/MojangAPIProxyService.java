@@ -22,7 +22,6 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Function;
 
 @LoggingDecorator(
   requestLogLevel = LogLevel.INFO,
@@ -60,6 +59,7 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
+      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle(
@@ -107,6 +107,7 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
+      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(optionalUUID.get()))))
       .responseSingle(
@@ -136,7 +137,7 @@ public class MojangAPIProxyService {
                 ) : null));
               });
         })
-        .toFuture());
+      .toFuture());
   }
 
   public enum CacheState {
