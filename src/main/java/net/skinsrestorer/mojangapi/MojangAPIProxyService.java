@@ -58,6 +58,7 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
+      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle(
@@ -68,6 +69,8 @@ public class MojangAPIProxyService {
               responseText -> {
                 var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
                 var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
+
+                databaseManager.putNameToUUID(name, uuid);
 
                 return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(responseCacheData, uuid != null, uuid));
               }))
@@ -101,6 +104,7 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
+      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(optionalUUID.get()))))
       .responseSingle(
@@ -114,6 +118,9 @@ public class MojangAPIProxyService {
                   .filter(p -> "textures".equals(p.getName()))
                   .findFirst()
                   .orElse(null);
+
+                databaseManager.putUUIDToSkin(optionalUUID.get(), property == null ? null
+                  : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()));
 
                 return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(responseCacheData, property != null, property != null ? new ProfileResponse.SkinProperty(
                   property.getValue(),
