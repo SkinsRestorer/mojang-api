@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import lombok.Getter;
 
 import javax.annotation.Nullable;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -19,6 +20,7 @@ public class DatabaseManager implements AutoCloseable {
   private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
 
   public DatabaseManager() {
+    // We use PostgreSQL
     var config = new HikariConfig();
 
     config.setJdbcUrl(System.getenv("JDBC_DATABASE_URL"));
@@ -78,12 +80,12 @@ public class DatabaseManager implements AutoCloseable {
     }, 0, 6, TimeUnit.HOURS);
   }
 
-  public void putNameToUUID(String name, @Nullable UUID uuid) {
+  public void putNameToUUID(String name, @Nullable UUID uuid, long createdAt) {
     try (var conn = ds.getConnection();
-         var stmt = conn.prepareStatement("INSERT INTO uuid_cache (name, uuid, created_at) VALUES " +
-           "(?, ?, NOW()) ON DUPLICATE KEY UPDATE uuid = VALUES(uuid), created_at = VALUES(created_at)")) {
+         var stmt = conn.prepareStatement("INSERT INTO uuid_cache (name, uuid, created_at) VALUES (?, ?, ?) ON CONFLICT (name) DO UPDATE SET uuid = EXCLUDED.uuid")) {
       stmt.setString(1, name);
       stmt.setString(2, uuid == null ? null : uuid.toString());
+      stmt.setTimestamp(3, new Timestamp(createdAt));
       stmt.executeUpdate();
     } catch (Exception e) {
       throw new RuntimeException(e);
@@ -92,7 +94,7 @@ public class DatabaseManager implements AutoCloseable {
 
   public DatabaseResult<UUID> getNameToUUID(String name) {
     try (var conn = ds.getConnection();
-         var stmt = conn.prepareStatement("SELECT uuid, UNIX_TIMESTAMP(created_at) FROM uuid_cache WHERE name = ?")) {
+         var stmt = conn.prepareStatement("SELECT uuid, created_at FROM uuid_cache WHERE name = ?")) {
       stmt.setString(1, name);
 
       try (var rs = stmt.executeQuery()) {
@@ -110,13 +112,13 @@ public class DatabaseManager implements AutoCloseable {
     return null;
   }
 
-  public void putUUIDToSkin(UUID uuid, @Nullable SkinProperty skinProperty) {
+  public void putUUIDToSkin(UUID uuid, @Nullable SkinProperty skinProperty, long createdAt) {
     try (var conn = ds.getConnection();
-         var stmt = conn.prepareStatement("INSERT INTO skin_cache (uuid, value, signature, created_at) VALUES " +
-           "(?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE value = VALUES(value), signature = VALUES(signature), created_at = VALUES(created_at)")) {
+         var stmt = conn.prepareStatement("INSERT INTO skin_cache (uuid, value, signature, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (uuid) DO UPDATE SET value = EXCLUDED.value, signature = EXCLUDED.signature")) {
       stmt.setString(1, uuid.toString());
       stmt.setString(2, skinProperty == null ? null : skinProperty.value());
       stmt.setString(3, skinProperty == null ? null : skinProperty.signature());
+      stmt.setTimestamp(4, new Timestamp(createdAt));
       stmt.executeUpdate();
     } catch (Exception e) {
       throw new RuntimeException(e);
@@ -125,7 +127,7 @@ public class DatabaseManager implements AutoCloseable {
 
   public DatabaseResult<SkinProperty> getUUIDToSkin(UUID uuid) {
     try (var conn = ds.getConnection();
-         var stmt = conn.prepareStatement("SELECT value, signature, UNIX_TIMESTAMP(created_at) FROM skin_cache WHERE uuid = ?")) {
+         var stmt = conn.prepareStatement("SELECT value, signature, created_at FROM skin_cache WHERE uuid = ?")) {
       stmt.setString(1, uuid.toString());
 
       try (var rs = stmt.executeQuery()) {

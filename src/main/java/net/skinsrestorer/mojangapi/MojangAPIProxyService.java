@@ -50,7 +50,7 @@ public class MojangAPIProxyService {
     }
 
     var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
-    return HttpClient.create()
+    return HttpResponse.of(HttpClient.create()
       .responseTimeout(Duration.ofSeconds(5))
       .headers(
         h -> {
@@ -58,7 +58,6 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
-      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle(
@@ -70,11 +69,11 @@ public class MojangAPIProxyService {
                 var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
                 var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
 
-                databaseManager.putNameToUUID(name, uuid);
+                databaseManager.putNameToUUID(name, uuid, responseCacheData.createdAt());
 
                 return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(responseCacheData, uuid != null, uuid));
               }))
-      .block();
+      .toFuture());
   }
 
   @Get("/skin/{uuid}")
@@ -96,7 +95,7 @@ public class MojangAPIProxyService {
     }
 
     var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
-    return HttpClient.create()
+    return HttpResponse.of(HttpClient.create()
       .responseTimeout(Duration.ofSeconds(5))
       .headers(
         h -> {
@@ -104,7 +103,6 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
-      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(optionalUUID.get()))))
       .responseSingle(
@@ -120,14 +118,14 @@ public class MojangAPIProxyService {
                   .orElse(null);
 
                 databaseManager.putUUIDToSkin(optionalUUID.get(), property == null ? null
-                  : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()));
+                  : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()), responseCacheData.createdAt());
 
                 return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(responseCacheData, property != null, property != null ? new ProfileResponse.SkinProperty(
                   property.getValue(),
                   property.getSignature()
                 ) : null));
               }))
-      .block();
+        .toFuture());
   }
 
   public enum CacheState {

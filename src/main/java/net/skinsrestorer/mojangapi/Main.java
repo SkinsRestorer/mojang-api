@@ -51,7 +51,7 @@ public class Main {
             "nameToUUID",
             "/mojang/uuid/Pistonmaster")
           .examplePaths(MojangAPIProxyService.class,
-            "uuidToProfile",
+            "uuidToSkin",
             "/mojang/skin/b1ae0778-4817-436c-96a3-a72c67cda060")
           .build());
   }
