@@ -1,11 +1,10 @@
 plugins {
     id 'application'
+    id 'java'
+    id 'eclipse'
+    id 'idea'
     id "io.spring.dependency-management" version "1.1.4"
 }
-
-apply plugin: 'java'
-apply plugin: 'eclipse'
-apply plugin: 'idea'
 
 repositories {
     mavenCentral()
@@ -44,12 +43,12 @@ dependencies {
 }
 
 application {
-    mainClass.set('example.armeria.server.annotated.Main')
+    mainClass.set('net.skinsrestorer.mojangapi.Main')
 }
 
 tasks.withType(JavaCompile) {
-    sourceCompatibility = '17'
-    targetCompatibility = '17'
+    sourceCompatibility = '21'
+    targetCompatibility = '21'
     options.encoding = 'UTF-8'
     options.debug = true
     options.compilerArgs += '-parameters'
