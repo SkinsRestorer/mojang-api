@@ -13,6 +13,7 @@ import io.netty.handler.codec.http.HttpHeaderNames;
 import lombok.RequiredArgsConstructor;
 import net.skinsrestorer.mojangapi.responses.MojangProfileResponse;
 import net.skinsrestorer.mojangapi.responses.MojangUUIDResponse;
+import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 
 import javax.annotation.Nullable;
@@ -21,6 +22,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 
 @LoggingDecorator(
   requestLogLevel = LogLevel.INFO,
@@ -85,6 +87,7 @@ public class MojangAPIProxyService {
 
     var cacheData = databaseManager.getUUIDToSkin(optionalUUID.get());
     if (cacheData != null) {
+      System.out.println("HIT");
       return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(
         new CacheData(CacheState.HIT, cacheData.createdAt()),
         cacheData.value() != null,
@@ -94,6 +97,7 @@ public class MojangAPIProxyService {
         ) : null));
     }
 
+    System.out.println("MISS");
     var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
     return HttpResponse.of(HttpClient.create()
       .responseTimeout(Duration.ofSeconds(5))
@@ -106,8 +110,14 @@ public class MojangAPIProxyService {
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(optionalUUID.get()))))
       .responseSingle(
-        (res, content) ->
-          content
+        (res, content) -> {
+          if (res.status().code() == 204) {
+            databaseManager.putUUIDToSkin(optionalUUID.get(), null, responseCacheData.createdAt());
+
+            return Mono.just(HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(responseCacheData, false, null)));
+          }
+
+          return content
             .asString()
             .map(
               responseText -> {
@@ -124,7 +134,8 @@ public class MojangAPIProxyService {
                   property.getValue(),
                   property.getSignature()
                 ) : null));
-              }))
+              });
+        })
         .toFuture());
   }
 
