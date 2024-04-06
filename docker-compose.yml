@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:14.11-alpine
+    image: postgres:16.2-alpine
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
