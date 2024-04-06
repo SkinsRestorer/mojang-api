@@ -13,7 +13,7 @@ repositories {
 
 dependencyManagement {
     imports {
-        mavenBom 'io.micrometer:micrometer-bom:1.12.2'
+        mavenBom 'io.micrometer:micrometer-bom:1.12.4'
         mavenBom 'io.netty:netty-bom:4.1.106.Final'
         mavenBom 'com.linecorp.armeria:armeria-bom:1.27.0'
         mavenBom 'org.junit:junit-bom:5.10.1'
