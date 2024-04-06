@@ -35,7 +35,7 @@ dependencies {
 
 dependencies {
     implementation 'com.linecorp.armeria:armeria'
-    runtimeOnly 'org.slf4j:slf4j-simple:1.7.36'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
 
     testImplementation 'com.linecorp.armeria:armeria-junit5'
     testImplementation 'net.javacrumbs.json-unit:json-unit-fluent:2.38.0'
