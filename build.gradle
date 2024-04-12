@@ -37,7 +37,7 @@ dependencies {
 
 dependencies {
   implementation 'com.linecorp.armeria:armeria'
-  runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
+  runtimeOnly 'org.slf4j:slf4j-simple:2.0.13'
   implementation "io.projectreactor.netty:reactor-netty-core:1.1.18"
   implementation "io.projectreactor.netty:reactor-netty-http:1.1.18"
   implementation 'com.google.code.gson:gson:2.10.1'
