@@ -10,7 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 public class Main {
   public static void main(String[] args) {
     try (var databaseManager = new DatabaseManager()) {
-      final Server server = newServer(8080, databaseManager);
+      final Server server = newServer(Integer.parseInt(System.getenv("SERVER_PORT")), databaseManager);
 
       server.closeOnJvmShutdown();
 
