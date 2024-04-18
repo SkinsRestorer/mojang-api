@@ -14,9 +14,9 @@ repositories {
 
 dependencyManagement {
   imports {
-    mavenBom 'io.micrometer:micrometer-bom:1.12.4'
-    mavenBom 'io.netty:netty-bom:4.1.108.Final'
-    mavenBom 'com.linecorp.armeria:armeria-bom:1.27.3'
+    mavenBom 'io.micrometer:micrometer-bom:1.12.5'
+    mavenBom 'io.netty:netty-bom:4.1.109.Final'
+    mavenBom 'com.linecorp.armeria:armeria-bom:1.28.2'
     mavenBom 'org.junit:junit-bom:5.10.2'
     mavenBom 'io.github.resilience4j:resilience4j-bom:2.2.0'
   }
@@ -37,9 +37,9 @@ dependencies {
 
 dependencies {
   implementation 'com.linecorp.armeria:armeria'
-  runtimeOnly 'org.slf4j:slf4j-simple:2.0.12'
-  implementation "io.projectreactor.netty:reactor-netty-core:1.1.17"
-  implementation "io.projectreactor.netty:reactor-netty-http:1.1.17"
+  runtimeOnly 'org.slf4j:slf4j-simple:2.0.13'
+  implementation "io.projectreactor.netty:reactor-netty-core:1.1.18"
+  implementation "io.projectreactor.netty:reactor-netty-http:1.1.18"
   implementation 'com.google.code.gson:gson:2.10.1'
   implementation 'org.postgresql:postgresql:42.7.3'
   implementation 'com.zaxxer:HikariCP:5.1.0'
