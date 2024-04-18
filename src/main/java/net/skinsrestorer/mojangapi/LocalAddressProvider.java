@@ -26,7 +26,12 @@ public class LocalAddressProvider {
         bitSet.set(bits - i - 1, ThreadLocalRandom.current().nextBoolean());
       }
 
-      return InetAddress.getByAddress(bitSet.toByteArray());
+      // Add padding to the end of the byte array, as BitSet does not persist the length of the original byte array
+      var exported = bitSet.toByteArray();
+      var byteArray = new byte[ipBase.length];
+      System.arraycopy(exported, 0, byteArray, 0, exported.length);
+
+      return InetAddress.getByAddress(byteArray);
     } catch (Exception e) {
       log.error("Failed to get random local address", e);
       throw new RuntimeException("Failed to get random local address", e);
