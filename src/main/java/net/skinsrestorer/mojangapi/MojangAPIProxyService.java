@@ -87,7 +87,6 @@ public class MojangAPIProxyService {
 
     var cacheData = databaseManager.getUUIDToSkin(optionalUUID.get());
     if (cacheData != null) {
-      System.out.println("HIT");
       return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(
         new CacheData(CacheState.HIT, cacheData.createdAt()),
         cacheData.value() != null,
@@ -97,7 +96,6 @@ public class MojangAPIProxyService {
         ) : null));
     }
 
-    System.out.println("MISS");
     var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
     return HttpResponse.of(HttpClient.create()
       .bindAddress(LocalAddressProvider::getRandomLocalAddress)

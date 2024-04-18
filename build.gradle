@@ -52,6 +52,7 @@ dependencies {
 
 application {
   mainClass.set('net.skinsrestorer.mojangapi.Main')
+  applicationDefaultJvmArgs = ["-Djava.net.preferIPv6Addresses=true"]
 }
 
 tasks.withType(JavaCompile).configureEach {
