@@ -21,7 +21,7 @@ services:
     env_file:
       - .env
     environment:
-      - JDBC_DATABASE_URL=jdbc:postgresql://db:5432/postgres
+      - JDBC_DATABASE_URL=jdbc:postgresql://localhost:5432/postgres
       - JDBC_DATABASE_USERNAME=postgres
       - JDBC_DATABASE_PASSWORD=postgres
     ports:
