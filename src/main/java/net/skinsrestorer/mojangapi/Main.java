@@ -4,23 +4,19 @@ import com.linecorp.armeria.server.RedirectService;
 import com.linecorp.armeria.server.Server;
 import com.linecorp.armeria.server.ServerBuilder;
 import com.linecorp.armeria.server.docs.DocService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 public class Main {
-
-  private static final Logger logger = LoggerFactory.getLogger(Main.class);
-
   public static void main(String[] args) {
-    try (var databaseManager = new DatabaseManager();
-         var proxyProvider = new MojangProxyProvider()) {
-      final Server server = newServer(8080, databaseManager, proxyProvider);
+    try (var databaseManager = new DatabaseManager()) {
+      final Server server = newServer(8080, databaseManager);
 
       server.closeOnJvmShutdown();
 
       server.start().join();
 
-      logger.info("Server has been started. Serving DocService at http://127.0.0.1:{}/docs",
+      log.info("Server has been started. Serving DocService at http://127.0.0.1:{}/docs",
         server.activeLocalPort());
 
       server.blockUntilShutdown();
@@ -35,15 +31,15 @@ public class Main {
    * @param port the port that the server is to be bound to
    */
   @SuppressWarnings("SameParameterValue")
-  private static Server newServer(int port, DatabaseManager databaseManager, MojangProxyProvider proxyProvider) {
+  private static Server newServer(int port, DatabaseManager databaseManager) {
     final ServerBuilder sb = Server.builder();
     sb.http(port);
-    configureServices(sb, databaseManager, proxyProvider);
+    configureServices(sb, databaseManager);
     return sb.build();
   }
 
-  static void configureServices(ServerBuilder sb, DatabaseManager databaseManager, MojangProxyProvider proxyProvider) {
-    sb.annotatedService("/mojang", new MojangAPIProxyService(databaseManager, proxyProvider))
+  static void configureServices(ServerBuilder sb, DatabaseManager databaseManager) {
+    sb.annotatedService("/mojang", new MojangAPIProxyService(databaseManager))
       .service("/", new RedirectService("/docs"))
       .serviceUnder("/docs",
         DocService.builder()

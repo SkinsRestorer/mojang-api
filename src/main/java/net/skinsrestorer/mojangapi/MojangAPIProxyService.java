@@ -34,7 +34,6 @@ public class MojangAPIProxyService {
   private static final String MOJANG_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false";
   private static final Gson GSON = new Gson();
   private final DatabaseManager databaseManager;
-  private final MojangProxyProvider proxyProvider;
 
   @Get("/uuid/{name}")
   public HttpResponse nameToUUID(@Param String name) {
@@ -52,6 +51,7 @@ public class MojangAPIProxyService {
 
     var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
     return HttpResponse.of(HttpClient.create()
+      .bindAddress(LocalAddressProvider::getRandomLocalAddress)
       .responseTimeout(Duration.ofSeconds(5))
       .headers(
         h -> {
@@ -59,7 +59,6 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
-      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle(
@@ -100,6 +99,7 @@ public class MojangAPIProxyService {
     System.out.println("MISS");
     var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
     return HttpResponse.of(HttpClient.create()
+      .bindAddress(LocalAddressProvider::getRandomLocalAddress)
       .responseTimeout(Duration.ofSeconds(5))
       .headers(
         h -> {
@@ -107,7 +107,6 @@ public class MojangAPIProxyService {
           h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
           h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
         })
-      .proxy(proxyProvider.get())
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(optionalUUID.get()))))
       .responseSingle(
