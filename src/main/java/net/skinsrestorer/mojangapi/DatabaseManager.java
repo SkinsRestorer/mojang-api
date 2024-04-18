@@ -67,11 +67,8 @@ public class DatabaseManager implements AutoCloseable {
     // cLEAN VIA VALUES FROm UUID_CACHE_DURATION AND SKIN_CACHE_DURATION
     cleanupExecutor.scheduleWithFixedDelay(() -> {
       try (var conn = ds.getConnection();
-           var stmt = conn.prepareStatement("DELETE FROM uuid_cache WHERE created_at < NOW() - INTERVAL ? HOUR");
-           var stmt2 = conn.prepareStatement("DELETE FROM skin_cache WHERE created_at < NOW() - INTERVAL ? HOUR")) {
-        stmt.setInt(1, (int) UUID_CACHE_DURATION.toHours());
-        stmt2.setInt(1, (int) SKIN_CACHE_DURATION.toHours());
-
+           var stmt = conn.prepareStatement("DELETE FROM uuid_cache WHERE created_at < NOW() - INTERVAL " + UUID_CACHE_DURATION.toHours() + " HOUR");
+           var stmt2 = conn.prepareStatement("DELETE FROM skin_cache WHERE created_at < NOW() - INTERVAL " + SKIN_CACHE_DURATION.toHours() + " HOUR")) {
         stmt.executeUpdate();
         stmt2.executeUpdate();
       } catch (Exception e) {
