@@ -53,6 +53,7 @@ public class MojangAPIProxyService {
     return HttpResponse.of(HttpClient.create()
       .bindAddress(LocalAddressProvider::getRandomLocalAddress)
       .responseTimeout(Duration.ofSeconds(5))
+      .compress(true)
       .headers(
         h -> {
           h.set(HttpHeaderNames.ACCEPT, "application/json");
@@ -101,6 +102,7 @@ public class MojangAPIProxyService {
     return HttpResponse.of(HttpClient.create()
       .bindAddress(LocalAddressProvider::getRandomLocalAddress)
       .responseTimeout(Duration.ofSeconds(5))
+      .compress(true)
       .headers(
         h -> {
           h.set(HttpHeaderNames.ACCEPT, "application/json");
