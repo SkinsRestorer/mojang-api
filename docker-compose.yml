@@ -10,6 +10,8 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - db:/var/lib/postgresql/data
   app:
@@ -17,6 +19,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
+    network_mode: "host"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
@@ -25,12 +28,12 @@ services:
     env_file:
       - .env
     environment:
-      - JDBC_DATABASE_URL=jdbc:postgresql://db:5432/postgres
+      - JDBC_DATABASE_URL=jdbc:postgresql://localhost:5432/postgres
       - JDBC_DATABASE_USERNAME=postgres
       - JDBC_DATABASE_PASSWORD=postgres
       - SERVER_PORT=8080
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
