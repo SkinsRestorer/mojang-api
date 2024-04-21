@@ -4,7 +4,6 @@ import com.linecorp.armeria.server.RedirectService;
 import com.linecorp.armeria.server.Server;
 import com.linecorp.armeria.server.docs.DocService;
 import com.linecorp.armeria.server.healthcheck.HealthCheckService;
-import com.linecorp.armeria.server.healthcheck.HealthChecker;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -15,7 +14,7 @@ public class Main {
         Server.builder()
           .http(Integer.parseInt(System.getenv("SERVER_PORT")))
           .annotatedService("/mojang", new MojangAPIProxyService(databaseManager))
-          .service("/health", HealthCheckService.builder() .build())
+          .service("/health", HealthCheckService.builder().build())
           .service("/", new RedirectService("/docs"))
           .serviceUnder("/docs",
             DocService.builder()
