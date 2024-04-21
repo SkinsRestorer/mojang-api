@@ -5,6 +5,7 @@ import com.linecorp.armeria.common.HttpMethod;
 import com.linecorp.armeria.common.HttpResponse;
 import com.linecorp.armeria.common.HttpStatus;
 import com.linecorp.armeria.common.logging.LogLevel;
+import com.linecorp.armeria.server.annotation.Decorator;
 import com.linecorp.armeria.server.annotation.Get;
 import com.linecorp.armeria.server.annotation.Param;
 import com.linecorp.armeria.server.annotation.decorator.CorsDecorator;
@@ -23,6 +24,7 @@ import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 
+@Decorator(ThrottlingDecorator.class)
 @LoggingDecorator(
   requestLogLevel = LogLevel.INFO,
   successfulResponseLogLevel = LogLevel.INFO

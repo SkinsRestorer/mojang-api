@@ -8,6 +8,8 @@ import com.linecorp.armeria.server.docs.DocService;
 import com.linecorp.armeria.server.healthcheck.HealthCheckService;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Duration;
+
 @Slf4j
 public class Main {
   public static void main(String[] args) {
@@ -15,6 +17,9 @@ public class Main {
       final Server server =
         Server.builder()
           .http(Integer.parseInt(System.getenv("SERVER_PORT")))
+          .maxNumConnections(500)
+          .maxRequestLength(5 * 1024)  // 5 kB
+          .requestTimeout(Duration.ofSeconds(10))
           .clientAddressTrustedProxyFilter(a -> true)
           .clientAddressSources(ClientAddressSource.ofHeader(HttpHeaderNames.X_FORWARDED_FOR))
           .annotatedService("/mojang", new MojangAPIProxyService(databaseManager))
