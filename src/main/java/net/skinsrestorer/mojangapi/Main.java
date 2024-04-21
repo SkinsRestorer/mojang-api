@@ -1,5 +1,7 @@
 package net.skinsrestorer.mojangapi;
 
+import com.linecorp.armeria.common.HttpHeaderNames;
+import com.linecorp.armeria.server.ClientAddressSource;
 import com.linecorp.armeria.server.RedirectService;
 import com.linecorp.armeria.server.Server;
 import com.linecorp.armeria.server.docs.DocService;
@@ -13,6 +15,8 @@ public class Main {
       final Server server =
         Server.builder()
           .http(Integer.parseInt(System.getenv("SERVER_PORT")))
+          .clientAddressTrustedProxyFilter(a -> true)
+          .clientAddressSources(ClientAddressSource.ofHeader(HttpHeaderNames.X_FORWARDED_FOR))
           .annotatedService("/mojang", new MojangAPIProxyService(databaseManager))
           .service("/health", HealthCheckService.builder().build())
           .service("/", new RedirectService("/docs"))
