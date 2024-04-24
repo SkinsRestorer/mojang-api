@@ -17,7 +17,6 @@ public class Main {
       final Server server =
         Server.builder()
           .http(Integer.parseInt(System.getenv("SERVER_PORT")))
-          .maxNumConnections(500)
           .maxRequestLength(5 * 1024)  // 5 kB
           .requestTimeout(Duration.ofSeconds(10))
           .clientAddressTrustedProxyFilter(a -> true)
