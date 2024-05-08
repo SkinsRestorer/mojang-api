@@ -3,6 +3,7 @@ package net.skinsrestorer.mojangapi;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.annotation.Nullable;
 import java.sql.Timestamp;
@@ -12,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+@Slf4j
 public class DatabaseManager implements AutoCloseable {
   public static final Duration UUID_CACHE_DURATION = Duration.ofDays(1);
   public static final Duration SKIN_CACHE_DURATION = Duration.ofDays(1);
@@ -20,7 +22,6 @@ public class DatabaseManager implements AutoCloseable {
   private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
 
   public DatabaseManager() {
-    // We use PostgreSQL
     var config = new HikariConfig();
 
     config.setJdbcUrl(System.getenv("JDBC_DATABASE_URL"));
@@ -64,13 +65,13 @@ public class DatabaseManager implements AutoCloseable {
   }
 
   public void scheduleCleanup() {
-    // cLEAN VIA VALUES FROm UUID_CACHE_DURATION AND SKIN_CACHE_DURATION
     cleanupExecutor.scheduleWithFixedDelay(() -> {
       try (var conn = ds.getConnection();
            var stmt = conn.prepareStatement("DELETE FROM uuid_cache WHERE created_at < NOW() - INTERVAL '" + UUID_CACHE_DURATION.toHours() + "' HOUR");
            var stmt2 = conn.prepareStatement("DELETE FROM skin_cache WHERE created_at < NOW() - INTERVAL '" + SKIN_CACHE_DURATION.toHours() + "' HOUR")) {
-        stmt.executeUpdate();
-        stmt2.executeUpdate();
+        var uuidRows = stmt.executeUpdate();
+        var skinRows = stmt2.executeUpdate();
+        log.info("Cleaned up {} rows from uuid_cache and {} rows from skin_cache", uuidRows, skinRows);
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
