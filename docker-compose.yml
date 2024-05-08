@@ -20,11 +20,6 @@ services:
       dockerfile: Dockerfile
     restart: always
     network_mode: host
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-      interval: 10s
-      timeout: 30s
-      retries: 3
     env_file:
       - .env
     environment:
@@ -35,13 +30,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-  autoheal:
-    restart: always
-    image: willfarrell/autoheal
-    environment:
-      - AUTOHEAL_CONTAINER_LABEL=all
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   db:
