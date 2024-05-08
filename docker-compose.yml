@@ -23,7 +23,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
-      timeout: 5s
+      timeout: 30s
       retries: 3
     env_file:
       - .env
