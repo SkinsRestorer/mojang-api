@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit;
 public class DatabaseManager implements AutoCloseable {
   public static final Duration UUID_CACHE_DURATION = Duration.ofDays(1);
   public static final Duration SKIN_CACHE_DURATION = Duration.ofDays(1);
+  public static final int UUID_MAX_ROWS = 10_000;
+  public static final int SKIN_MAX_ROWS = 10_000;
   @Getter
   private final HikariDataSource ds;
   private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -46,12 +48,6 @@ public class DatabaseManager implements AutoCloseable {
           + "uuid VARCHAR(36),"
           + "created_at TIMESTAMP NOT NULL"
           + ")");
-    } catch (Exception e) {
-      throw new RuntimeException(e);
-    }
-
-    try (var conn = ds.getConnection();
-         var stmt = conn.createStatement()) {
       stmt.execute(
         "CREATE TABLE IF NOT EXISTS skin_cache ("
           + "uuid VARCHAR(36) PRIMARY KEY,"
@@ -59,6 +55,36 @@ public class DatabaseManager implements AutoCloseable {
           + "signature TEXT,"
           + "created_at TIMESTAMP NOT NULL"
           + ")");
+
+      // Delete old rows if the table exceeds the maximum number of rows
+      stmt.execute(
+        "CREATE OR REPLACE FUNCTION delete_old_uuid_cache_rows() RETURNS TRIGGER AS $$"
+          + "BEGIN"
+          + " IF (SELECT COUNT(*) FROM uuid_cache) > " + UUID_MAX_ROWS + " THEN"
+          + " DELETE FROM uuid_cache WHERE created_at = (SELECT MIN(created_at) FROM uuid_cache);"
+          + " END IF;"
+          + " RETURN NEW;"
+          + "END;"
+          + "$$ LANGUAGE plpgsql");
+      stmt.execute(
+        "CREATE TRIGGER delete_old_uuid_cache_rows_trigger"
+          + " AFTER INSERT ON uuid_cache"
+          + " EXECUTE FUNCTION delete_old_uuid_cache_rows()");
+
+      // Delete old rows if the table exceeds the maximum number of rows
+      stmt.execute(
+        "CREATE OR REPLACE FUNCTION delete_old_skin_cache_rows() RETURNS TRIGGER AS $$"
+          + "BEGIN"
+          + " IF (SELECT COUNT(*) FROM skin_cache) > " + SKIN_MAX_ROWS + " THEN"
+          + " DELETE FROM skin_cache WHERE created_at = (SELECT MIN(created_at) FROM skin_cache);"
+          + " END IF;"
+          + " RETURN NEW;"
+          + "END;"
+          + "$$ LANGUAGE plpgsql");
+      stmt.execute(
+        "CREATE TRIGGER delete_old_skin_cache_rows_trigger"
+          + " AFTER INSERT ON skin_cache"
+          + " EXECUTE FUNCTION delete_old_skin_cache_rows()");
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
