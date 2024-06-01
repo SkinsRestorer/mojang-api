@@ -67,7 +67,7 @@ public class DatabaseManager implements AutoCloseable {
           + "END;"
           + "$$ LANGUAGE plpgsql");
       stmt.execute(
-        "CREATE TRIGGER delete_old_uuid_cache_rows_trigger"
+        "CREATE OR REPLACE FUNCTION delete_old_skin_cache_rows() RETURNS TRIGGER AS $$"
           + " AFTER INSERT ON uuid_cache"
           + " EXECUTE FUNCTION delete_old_uuid_cache_rows()");
 
@@ -82,7 +82,7 @@ public class DatabaseManager implements AutoCloseable {
           + "END;"
           + "$$ LANGUAGE plpgsql");
       stmt.execute(
-        "CREATE TRIGGER delete_old_skin_cache_rows_trigger"
+        "CREATE OR REPLACE FUNCTION delete_old_skin_cache_rows() RETURNS TRIGGER AS $$"
           + " AFTER INSERT ON skin_cache"
           + " EXECUTE FUNCTION delete_old_skin_cache_rows()");
     } catch (Exception e) {
