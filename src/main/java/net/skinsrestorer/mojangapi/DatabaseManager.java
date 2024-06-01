@@ -66,10 +66,12 @@ public class DatabaseManager implements AutoCloseable {
           + " RETURN NEW;"
           + "END;"
           + "$$ LANGUAGE plpgsql");
-      stmt.execute(
-        "CREATE OR REPLACE FUNCTION delete_old_skin_cache_rows() RETURNS TRIGGER AS $$"
-          + " AFTER INSERT ON uuid_cache"
-          + " EXECUTE FUNCTION delete_old_uuid_cache_rows()");
+      if (!triggerExists("delete_old_uuid_cache_rows_trigger")) {
+        stmt.execute(
+          "CREATE TRIGGER delete_old_uuid_cache_rows_trigger"
+            + " AFTER INSERT ON uuid_cache"
+            + " EXECUTE FUNCTION delete_old_uuid_cache_rows()");
+      }
 
       // Delete old rows if the table exceeds the maximum number of rows
       stmt.execute(
@@ -81,10 +83,25 @@ public class DatabaseManager implements AutoCloseable {
           + " RETURN NEW;"
           + "END;"
           + "$$ LANGUAGE plpgsql");
-      stmt.execute(
-        "CREATE OR REPLACE FUNCTION delete_old_skin_cache_rows() RETURNS TRIGGER AS $$"
-          + " AFTER INSERT ON skin_cache"
-          + " EXECUTE FUNCTION delete_old_skin_cache_rows()");
+      if (!triggerExists("delete_old_skin_cache_rows_trigger")) {
+        stmt.execute(
+          "CREATE TRIGGER delete_old_skin_cache_rows_trigger"
+            + " AFTER INSERT ON skin_cache"
+            + " EXECUTE FUNCTION delete_old_skin_cache_rows()");
+      }
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  private boolean triggerExists(String triggerName) {
+    try (var conn = ds.getConnection();
+         var stmt = conn.prepareStatement("SELECT 1 FROM pg_trigger WHERE tgname = ?")) {
+      stmt.setString(1, triggerName);
+
+      try (var rs = stmt.executeQuery()) {
+        return rs.next();
+      }
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
