@@ -148,63 +148,62 @@ public class DatabaseManager implements AutoCloseable {
         .flatMap(Result::getRowsUpdated)
         .doOnNext(it -> log.info("Cleaned up {} rows from skin_cache", it))
         .subscribe();
-
     }, 0, 6, TimeUnit.HOURS);
   }
 
   public void putNameToUUID(String name, @Nullable UUID uuid, long createdAt) {
     createConnection()
-        .flatMapMany(it -> it.createStatement("INSERT INTO uuid_cache (name, uuid, created_at) VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET uuid = EXCLUDED.uuid")
-            .bind("$1", name)
-            .bind("$2", uuid == null ? null : uuid.toString())
-            .bind("$3", new Timestamp(createdAt))
-            .execute())
-        .flatMap(Result::getRowsUpdated)
-        .doOnNext(it -> log.debug("Inserted {} rows into uuid_cache", it))
-        .subscribe();
+      .flatMapMany(it -> it.createStatement("INSERT INTO uuid_cache (name, uuid, created_at) VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET uuid = EXCLUDED.uuid")
+        .bind("$1", name)
+        .bind("$2", uuid == null ? null : uuid.toString())
+        .bind("$3", new Timestamp(createdAt))
+        .execute())
+      .flatMap(Result::getRowsUpdated)
+      .doOnNext(it -> log.debug("Inserted {} rows into uuid_cache", it))
+      .subscribe();
   }
 
   public Mono<DatabaseResult<UUID>> getNameToUUID(String name) {
     return createConnection()
-        .flatMapMany(it -> it.createStatement("SELECT uuid, created_at FROM uuid_cache WHERE name = $1")
-            .bind("$1", name)
-            .execute())
-        .next()
-        .flatMapMany(it -> it.map((row, meta) -> {
-          var createdAt = Objects.requireNonNull(row.get("created_at", Timestamp.class)).getTime();
-          var uuid = row.get("uuid", String.class);
+      .flatMapMany(it -> it.createStatement("SELECT uuid, created_at FROM uuid_cache WHERE name = $1")
+        .bind("$1", name)
+        .execute())
+      .next()
+      .flatMapMany(it -> it.map((row, meta) -> {
+        var createdAt = Objects.requireNonNull(row.get("created_at", Timestamp.class)).getTime();
+        var uuid = row.get("uuid", String.class);
 
-          return new DatabaseResult<>(createdAt, uuid == null ? null : UUID.fromString(uuid));
-        }))
-        .next();
+        return new DatabaseResult<>(createdAt, uuid == null ? null : UUID.fromString(uuid));
+      }))
+      .next();
   }
 
   public void putUUIDToSkin(UUID uuid, @Nullable SkinProperty skinProperty, long createdAt) {
     createConnection()
-        .flatMapMany(it -> it.createStatement("INSERT INTO skin_cache (uuid, value, signature, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (uuid) DO UPDATE SET value = EXCLUDED.value, signature = EXCLUDED.signature")
-            .bind("$1", uuid.toString())
-            .bind("$2", Parameters.in(PostgresqlObjectId.TEXT, skinProperty == null ? null : skinProperty.value()))
-            .bind("$3", Parameters.in(PostgresqlObjectId.TEXT, skinProperty == null ? null : skinProperty.signature()))
-            .bind("$4", new Timestamp(createdAt))
-            .execute())
-        .flatMap(Result::getRowsUpdated)
-        .doOnNext(it -> log.debug("Inserted {} rows into skin_cache", it))
-        .subscribe();
+      .flatMapMany(it -> it.createStatement("INSERT INTO skin_cache (uuid, value, signature, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (uuid) DO UPDATE SET value = EXCLUDED.value, signature = EXCLUDED.signature")
+        .bind("$1", uuid.toString())
+        .bind("$2", Parameters.in(PostgresqlObjectId.TEXT, skinProperty == null ? null : skinProperty.value()))
+        .bind("$3", Parameters.in(PostgresqlObjectId.TEXT, skinProperty == null ? null : skinProperty.signature()))
+        .bind("$4", new Timestamp(createdAt))
+        .execute())
+      .flatMap(Result::getRowsUpdated)
+      .doOnNext(it -> log.debug("Inserted {} rows into skin_cache", it))
+      .subscribe();
   }
 
   public Mono<DatabaseResult<SkinProperty>> getUUIDToSkin(UUID uuid) {
     return createConnection()
-        .flatMapMany(it -> it.createStatement("SELECT value, signature, created_at FROM skin_cache WHERE uuid = $1")
-            .bind("$1", uuid.toString())
-            .execute())
-        .next()
-        .flatMapMany(it -> it.map((row, meta) -> {
-          var createdAt = Objects.requireNonNull(row.get("created_at", Timestamp.class)).getTime();
-          var value = row.get("value", String.class);
-          var signature = row.get("signature", String.class);
+      .flatMapMany(it -> it.createStatement("SELECT value, signature, created_at FROM skin_cache WHERE uuid = $1")
+        .bind("$1", uuid.toString())
+        .execute())
+      .next()
+      .flatMapMany(it -> it.map((row, meta) -> {
+        var createdAt = Objects.requireNonNull(row.get("created_at", Timestamp.class)).getTime();
+        var value = row.get("value", String.class);
+        var signature = row.get("signature", String.class);
 
-          return new DatabaseResult<>(createdAt, value == null || signature == null ? null : new SkinProperty(value, signature));
-        }))
+        return new DatabaseResult<>(createdAt, value == null || signature == null ? null : new SkinProperty(value, signature));
+      }))
       .next();
   }
 
