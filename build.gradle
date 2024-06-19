@@ -28,8 +28,8 @@ dependencies {
   implementation "io.projectreactor.netty:reactor-netty-core:1.1.19"
   implementation "io.projectreactor.netty:reactor-netty-http:1.1.19"
   implementation 'com.google.code.gson:gson:2.11.0'
-  implementation 'org.postgresql:postgresql:42.7.3'
-  implementation 'com.zaxxer:HikariCP:5.1.0'
+  implementation 'org.postgresql:r2dbc-postgresql:1.0.5.RELEASE'
+  implementation 'io.r2dbc:r2dbc-pool:1.0.1.RELEASE'
 }
 
 application {
