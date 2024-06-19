@@ -131,16 +131,14 @@ public class DatabaseManager implements AutoCloseable {
   public void scheduleCleanup() {
     cleanupExecutor.scheduleWithFixedDelay(() -> {
       createConnection()
-        .flatMapMany(it -> it.createStatement("DELETE FROM uuid_cache WHERE created_at < NOW() - INTERVAL $1")
-          .bind("$1", UUID_CACHE_DURATION.toHours() + " HOUR")
+        .flatMapMany(it -> it.createStatement("DELETE FROM uuid_cache WHERE created_at < NOW() - INTERVAL '" + UUID_CACHE_DURATION.toHours() + "' HOUR")
           .execute())
         .flatMap(Result::getRowsUpdated)
         .doOnNext(it -> log.info("Cleaned up {} rows from uuid_cache", it))
         .subscribe();
 
       createConnection()
-        .flatMapMany(it -> it.createStatement("DELETE FROM skin_cache WHERE created_at < NOW() - INTERVAL $1")
-          .bind("$1", SKIN_CACHE_DURATION.toHours() + " HOUR")
+        .flatMapMany(it -> it.createStatement("DELETE FROM skin_cache WHERE created_at < NOW() - INTERVAL '" + SKIN_CACHE_DURATION.toHours() + "' HOUR")
           .execute())
         .flatMap(Result::getRowsUpdated)
         .doOnNext(it -> log.info("Cleaned up {} rows from skin_cache", it))
