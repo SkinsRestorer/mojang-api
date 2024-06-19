@@ -48,36 +48,37 @@ public class MojangAPIProxyService {
           new CacheData(CacheState.HIT, cacheData.createdAt()),
           cacheData.value() != null,
           cacheData.value())))
-        .switchIfEmpty(Mono.defer(() -> {
-          var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
-          return HttpClient.create()
-            .bindAddress(LocalAddressProvider::getRandomLocalAddress)
-            .responseTimeout(Duration.ofSeconds(5))
-            .compress(true)
-            .headers(
-              h -> {
-                h.set(HttpHeaderNames.ACCEPT, "application/json");
-                h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
-                h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
-              })
-            .get()
-            .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
-            .responseSingle(
-              (res, content) ->
-                content
-                  .asString()
-                  .map(
-                    responseText -> {
-                      var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
-                      var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
-
-                      databaseManager.putNameToUUID(name, uuid, responseCacheData.createdAt());
-
-                      return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(responseCacheData, uuid != null, uuid));
-                    })
-            );
-        }))
+        .switchIfEmpty(crawlMojangUUID(name))
         .toFuture());
+  }
+
+  private Mono<HttpResponse> crawlMojangUUID(String name) {
+    return HttpClient.create()
+      .bindAddress(LocalAddressProvider::getRandomLocalAddress)
+      .responseTimeout(Duration.ofSeconds(5))
+      .compress(true)
+      .headers(
+        h -> {
+          h.set(HttpHeaderNames.ACCEPT, "application/json");
+          h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
+          h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
+        })
+      .get()
+      .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
+      .responseSingle(
+        (res, content) ->
+          content
+            .asString()
+            .map(
+              responseText -> {
+                var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
+                var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
+
+                databaseManager.putNameToUUID(name, uuid, System.currentTimeMillis());
+
+                return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(new CacheData(CacheState.MISS, System.currentTimeMillis()), uuid != null, uuid));
+              })
+      );
   }
 
   @Get("/skin/{uuid}")
@@ -91,51 +92,52 @@ public class MojangAPIProxyService {
               cacheData.value().value(),
               cacheData.value().signature()
             ) : null)))
-          .switchIfEmpty(Mono.defer(() -> {
-            var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
-            return HttpClient.create()
-              .bindAddress(LocalAddressProvider::getRandomLocalAddress)
-              .responseTimeout(Duration.ofSeconds(5))
-              .compress(true)
-              .headers(
-                h -> {
-                  h.set(HttpHeaderNames.ACCEPT, "application/json");
-                  h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
-                  h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
-                })
-              .get()
-              .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(value))))
-              .responseSingle(
-                (res, content) -> {
-                  if (res.status().code() == 204) {
-                    databaseManager.putUUIDToSkin(value, null, responseCacheData.createdAt());
-
-                    return Mono.just(HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(responseCacheData, false, null)));
-                  }
-
-                  return content
-                    .asString()
-                    .map(
-                      responseText -> {
-                        var response = GSON.fromJson(responseText, MojangProfileResponse.class);
-                        var property = response.getProperties() == null ? null : Arrays.stream(response.getProperties())
-                          .filter(p -> "textures".equals(p.getName()))
-                          .findFirst()
-                          .orElse(null);
-
-                        databaseManager.putUUIDToSkin(value, property == null ? null
-                          : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()), responseCacheData.createdAt());
-
-                        return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(responseCacheData, property != null, property != null ? new ProfileResponse.SkinProperty(
-                          property.getValue(),
-                          property.getSignature()
-                        ) : null));
-                      });
-                });
-          }))
+          .switchIfEmpty(crawlMojangProfile(value))
           .toFuture()
         ))
       .orElseGet(() -> HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID)));
+  }
+
+  private Mono<HttpResponse> crawlMojangProfile(UUID uuid) {
+    return HttpClient.create()
+      .bindAddress(LocalAddressProvider::getRandomLocalAddress)
+      .responseTimeout(Duration.ofSeconds(5))
+      .compress(true)
+      .headers(
+        h -> {
+          h.set(HttpHeaderNames.ACCEPT, "application/json");
+          h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
+          h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
+        })
+      .get()
+      .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(uuid))))
+      .responseSingle(
+        (res, content) -> {
+          if (res.status().code() == 204) {
+            databaseManager.putUUIDToSkin(uuid, null, System.currentTimeMillis());
+
+            return Mono.just(HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, System.currentTimeMillis()), false, null)));
+          }
+
+          return content
+            .asString()
+            .map(
+              responseText -> {
+                var response = GSON.fromJson(responseText, MojangProfileResponse.class);
+                var property = response.getProperties() == null ? null : Arrays.stream(response.getProperties())
+                  .filter(p -> "textures".equals(p.getName()))
+                  .findFirst()
+                  .orElse(null);
+
+                databaseManager.putUUIDToSkin(uuid, property == null ? null
+                  : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()), System.currentTimeMillis());
+
+                return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, System.currentTimeMillis()), property != null, property != null ? new ProfileResponse.SkinProperty(
+                  property.getValue(),
+                  property.getSignature()
+                ) : null));
+              });
+        });
   }
 
   public enum CacheState {
