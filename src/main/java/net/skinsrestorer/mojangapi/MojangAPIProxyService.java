@@ -12,6 +12,7 @@ import com.linecorp.armeria.server.annotation.decorator.CorsDecorator;
 import com.linecorp.armeria.server.annotation.decorator.LoggingDecorator;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import net.skinsrestorer.mojangapi.responses.MojangProfileResponse;
 import net.skinsrestorer.mojangapi.responses.MojangUUIDResponse;
 import reactor.core.publisher.Mono;
@@ -25,6 +26,7 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.UUID;
 
+@Slf4j
 @Decorator(ThrottlingDecorator.class)
 @LoggingDecorator(
   requestLogLevel = LogLevel.INFO,
@@ -51,6 +53,7 @@ public class MojangAPIProxyService {
           cacheData.value() != null,
           cacheData.value())))
         .switchIfEmpty(crawlMojangUUID(name))
+        .doOnError(e -> log.error("Failed to fetch UUID for name {}", name))
         .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
         .toFuture());
   }
@@ -91,6 +94,7 @@ public class MojangAPIProxyService {
               cacheData.value().signature()
             ) : null)))
           .switchIfEmpty(crawlMojangProfile(value))
+          .doOnError(e -> log.error("Failed to fetch skin for UUID {}", value))
           .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
           .toFuture()
         ))
