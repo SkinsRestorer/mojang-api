@@ -18,6 +18,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import static io.r2dbc.pool.PoolingConnectionFactoryProvider.MAX_SIZE;
 import static io.r2dbc.postgresql.PostgresqlConnectionFactoryProvider.APPLICATION_NAME;
 import static io.r2dbc.spi.ConnectionFactoryOptions.*;
 
@@ -43,6 +44,7 @@ public class DatabaseManager implements AutoCloseable {
       .option(PASSWORD, System.getenv("JDBC_DATABASE_PASSWORD"))
       .option(LOCK_WAIT_TIMEOUT, Duration.ofSeconds(15))
       .option(STATEMENT_TIMEOUT, Duration.ofSeconds(15))
+      .option(MAX_SIZE, 100)
       .build());
 
     createTables();
