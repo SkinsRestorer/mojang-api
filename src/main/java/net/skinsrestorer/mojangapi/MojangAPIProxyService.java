@@ -20,6 +20,8 @@ import reactor.netty.http.client.HttpClient;
 import javax.annotation.Nullable;
 import java.net.URI;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -49,6 +51,7 @@ public class MojangAPIProxyService {
           cacheData.value() != null,
           cacheData.value())))
         .switchIfEmpty(crawlMojangUUID(name))
+        .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
         .toFuture());
   }
 
@@ -69,9 +72,10 @@ public class MojangAPIProxyService {
         var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
         var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
 
-        databaseManager.putNameToUUID(name, uuid, System.currentTimeMillis());
+        var time = LocalDateTime.now();
+        databaseManager.putNameToUUID(name, uuid, time);
 
-        return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(new CacheData(CacheState.MISS, System.currentTimeMillis()), uuid != null, uuid));
+        return HttpResponse.ofJson(HttpStatus.OK, new UUIDResponse(new CacheData(CacheState.MISS, time.toEpochSecond(ZoneOffset.UTC)), uuid != null, uuid));
       }));
   }
 
@@ -87,6 +91,7 @@ public class MojangAPIProxyService {
               cacheData.value().signature()
             ) : null)))
           .switchIfEmpty(crawlMojangProfile(value))
+          .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
           .toFuture()
         ))
       .orElseGet(() -> HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID)));
@@ -107,9 +112,10 @@ public class MojangAPIProxyService {
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(uuid))))
       .responseSingle((res, content) -> {
         if (res.status().code() == 204) {
-          databaseManager.putUUIDToSkin(uuid, null, System.currentTimeMillis());
+          var time = LocalDateTime.now();
+          databaseManager.putUUIDToSkin(uuid, null, time);
 
-          return Mono.just(HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, System.currentTimeMillis()), false, null)));
+          return Mono.just(HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, time.toEpochSecond(ZoneOffset.UTC)), false, null)));
         }
 
         return content.asString().map(responseText -> {
@@ -119,10 +125,11 @@ public class MojangAPIProxyService {
             .findFirst()
             .orElse(null);
 
+          var time = LocalDateTime.now();
           databaseManager.putUUIDToSkin(uuid, property == null ? null
-            : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()), System.currentTimeMillis());
+            : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()), time);
 
-          return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, System.currentTimeMillis()), property != null, property != null ? new ProfileResponse.SkinProperty(
+          return HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(new CacheData(CacheState.MISS, time.toEpochSecond(ZoneOffset.UTC)), property != null, property != null ? new ProfileResponse.SkinProperty(
             property.getValue(),
             property.getSignature()
           ) : null));
@@ -138,7 +145,8 @@ public class MojangAPIProxyService {
   public record ErrorResponse(ErrorType error) {
     public enum ErrorType {
       INVALID_NAME,
-      INVALID_UUID
+      INVALID_UUID,
+      INTERNAL_ERROR
     }
   }
 

@@ -7,9 +7,9 @@ import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nullable;
-import java.sql.Timestamp;
 import java.time.Duration;
-import java.util.HashMap;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -17,7 +17,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static io.r2dbc.postgresql.PostgresqlConnectionFactoryProvider.APPLICATION_NAME;
-import static io.r2dbc.postgresql.PostgresqlConnectionFactoryProvider.OPTIONS;
 import static io.r2dbc.spi.ConnectionFactoryOptions.*;
 
 @Slf4j
@@ -146,12 +145,12 @@ public class DatabaseManager implements AutoCloseable {
     }, 0, 6, TimeUnit.HOURS);
   }
 
-  public void putNameToUUID(String name, @Nullable UUID uuid, long createdAt) {
+  public void putNameToUUID(String name, @Nullable UUID uuid, LocalDateTime createdAt) {
     createConnection()
       .flatMapMany(it -> it.createStatement("INSERT INTO uuid_cache (name, uuid, created_at) VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET uuid = EXCLUDED.uuid")
         .bind("$1", name)
-        .bind("$2", uuid == null ? null : uuid.toString())
-        .bind("$3", new Timestamp(createdAt))
+        .bind("$2", Parameters.in(PostgresqlObjectId.VARCHAR, uuid == null ? null : uuid.toString()))
+        .bind("$3", createdAt)
         .execute())
       .flatMap(Result::getRowsUpdated)
       .doOnNext(it -> log.debug("Inserted {} rows into uuid_cache", it))
@@ -165,21 +164,21 @@ public class DatabaseManager implements AutoCloseable {
         .execute())
       .next()
       .flatMapMany(it -> it.map((row, meta) -> {
-        var createdAt = Objects.requireNonNull(row.get("created_at", Timestamp.class)).getTime();
+        var createdAt = Objects.requireNonNull(row.get("created_at", LocalDateTime.class));
         var uuid = row.get("uuid", String.class);
 
-        return new DatabaseResult<>(createdAt, uuid == null ? null : UUID.fromString(uuid));
+        return new DatabaseResult<>(createdAt.toEpochSecond(ZoneOffset.UTC), uuid == null ? null : UUID.fromString(uuid));
       }))
       .next();
   }
 
-  public void putUUIDToSkin(UUID uuid, @Nullable SkinProperty skinProperty, long createdAt) {
+  public void putUUIDToSkin(UUID uuid, @Nullable SkinProperty skinProperty, LocalDateTime createdAt) {
     createConnection()
       .flatMapMany(it -> it.createStatement("INSERT INTO skin_cache (uuid, value, signature, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (uuid) DO UPDATE SET value = EXCLUDED.value, signature = EXCLUDED.signature")
         .bind("$1", uuid.toString())
         .bind("$2", Parameters.in(PostgresqlObjectId.TEXT, skinProperty == null ? null : skinProperty.value()))
         .bind("$3", Parameters.in(PostgresqlObjectId.TEXT, skinProperty == null ? null : skinProperty.signature()))
-        .bind("$4", new Timestamp(createdAt))
+        .bind("$4", createdAt)
         .execute())
       .flatMap(Result::getRowsUpdated)
       .doOnNext(it -> log.debug("Inserted {} rows into skin_cache", it))
@@ -193,11 +192,11 @@ public class DatabaseManager implements AutoCloseable {
         .execute())
       .next()
       .flatMapMany(it -> it.map((row, meta) -> {
-        var createdAt = Objects.requireNonNull(row.get("created_at", Timestamp.class)).getTime();
+        var createdAt = Objects.requireNonNull(row.get("created_at", LocalDateTime.class));
         var value = row.get("value", String.class);
         var signature = row.get("signature", String.class);
 
-        return new DatabaseResult<>(createdAt, value == null || signature == null ? null : new SkinProperty(value, signature));
+        return new DatabaseResult<>(createdAt.toEpochSecond(ZoneOffset.UTC), value == null || signature == null ? null : new SkinProperty(value, signature));
       }))
       .next();
   }
