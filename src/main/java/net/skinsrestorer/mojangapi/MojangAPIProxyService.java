@@ -83,13 +83,13 @@ public class MojangAPIProxyService {
   public HttpResponse uuidToSkin(@Param String uuid) {
     return UUIDUtils.tryParseUniqueId(uuid).map(value -> HttpResponse.of(
       databaseManager.getUUIDToSkin(value)
-        .flatMap(cacheData -> Mono.just(HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(
+        .map(cacheData -> HttpResponse.ofJson(HttpStatus.OK, new ProfileResponse(
           new CacheData(CacheState.HIT, cacheData.createdAt()),
           cacheData.value() != null,
           cacheData.value() != null ? new ProfileResponse.SkinProperty(
             cacheData.value().value(),
             cacheData.value().signature()
-          ) : null))))
+          ) : null)))
         .switchIfEmpty(Mono.defer(() -> {
           var responseCacheData = new CacheData(CacheState.MISS, System.currentTimeMillis());
           return HttpClient.create()
