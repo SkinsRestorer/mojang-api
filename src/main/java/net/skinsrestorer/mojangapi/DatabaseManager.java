@@ -31,10 +31,6 @@ public class DatabaseManager implements AutoCloseable {
   private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
 
   public DatabaseManager() {
-    var options = new HashMap<String, String>();
-    options.put("lock_timeout", "10s");
-    options.put("statement_timeout", "5m");
-
     this.connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
       .option(DRIVER, "pool")
       .option(PROTOCOL, "postgresql")
@@ -44,7 +40,8 @@ public class DatabaseManager implements AutoCloseable {
       .option(DATABASE, System.getenv("JDBC_DATABASE_NAME"))
       .option(USER, System.getenv("JDBC_DATABASE_USERNAME"))
       .option(PASSWORD, System.getenv("JDBC_DATABASE_PASSWORD"))
-      .option(OPTIONS, options)
+      .option(LOCK_WAIT_TIMEOUT, Duration.ofSeconds(15))
+      .option(STATEMENT_TIMEOUT, Duration.ofSeconds(15))
       .build());
 
     createTables();
