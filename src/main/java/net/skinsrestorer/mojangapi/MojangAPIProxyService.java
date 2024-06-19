@@ -53,7 +53,7 @@ public class MojangAPIProxyService {
           cacheData.value() != null,
           cacheData.value())))
         .switchIfEmpty(crawlMojangUUID(name))
-        .doOnError(e -> log.error("Failed to fetch UUID for name {}", name))
+        .doOnError(e -> log.error("Failed to fetch UUID for name {}", name, e))
         .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
         .toFuture());
   }
@@ -94,7 +94,7 @@ public class MojangAPIProxyService {
               cacheData.value().signature()
             ) : null)))
           .switchIfEmpty(crawlMojangProfile(value))
-          .doOnError(e -> log.error("Failed to fetch skin for UUID {}", value))
+          .doOnError(e -> log.error("Failed to fetch skin for UUID {}", value, e))
           .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
           .toFuture()
         ))
