@@ -10,6 +10,10 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -29,6 +33,10 @@ services:
       - JDBC_DATABASE_USERNAME=postgres
       - JDBC_DATABASE_PASSWORD=postgres
       - SERVER_PORT=8080
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       db:
         condition: service_healthy
@@ -37,6 +45,10 @@ services:
     image: willfarrell/autoheal
     environment:
       - AUTOHEAL_CONTAINER_LABEL=all
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
