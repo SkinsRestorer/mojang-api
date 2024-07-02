@@ -55,6 +55,7 @@ public class MojangAPIProxyService {
         .switchIfEmpty(crawlMojangUUID(name))
         .doOnError(e -> log.error("Failed to fetch UUID for name {}", name, e))
         .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
+        .timeout(Duration.ofSeconds(10), Mono.just(HttpResponse.ofJson(HttpStatus.SERVICE_UNAVAILABLE, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_TIMEOUT))))
         .toFuture());
   }
 
@@ -96,6 +97,7 @@ public class MojangAPIProxyService {
           .switchIfEmpty(crawlMojangProfile(value))
           .doOnError(e -> log.error("Failed to fetch skin for UUID {}", value, e))
           .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
+          .timeout(Duration.ofSeconds(10), Mono.just(HttpResponse.ofJson(HttpStatus.SERVICE_UNAVAILABLE, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_TIMEOUT))))
           .toFuture()
         ))
       .orElseGet(() -> HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID)));
@@ -150,6 +152,7 @@ public class MojangAPIProxyService {
     public enum ErrorType {
       INVALID_NAME,
       INVALID_UUID,
+      INTERNAL_TIMEOUT,
       INTERNAL_ERROR
     }
   }
