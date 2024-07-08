@@ -23,6 +23,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://eclipse.skinsrestorer.net/health"]
+      interval: 10s
+      timeout: 30s
+      retries: 3
     network_mode: host
     env_file:
       - .env
