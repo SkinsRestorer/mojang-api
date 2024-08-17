@@ -1,6 +1,7 @@
 # mojang-api
 
-Mojang API proxy with automatic caching.
+Public Mojang API proxy with automatic caching.
+See https://eclipse.skinsrestorer.net/docs/ for usage & documentation
 
 ## Sysctl
 
