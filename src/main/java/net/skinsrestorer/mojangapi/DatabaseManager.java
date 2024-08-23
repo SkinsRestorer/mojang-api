@@ -154,6 +154,10 @@ public class DatabaseManager implements AutoCloseable {
   }
 
   public void putNameToUUID(String name, @Nullable UUID uuid, LocalDateTime createdAt) {
+    if (true) {
+      return;
+    }
+
     useConnectionFlux(conn -> conn.flatMapMany(it -> it.createStatement(
           "INSERT INTO uuid_cache (name, uuid, created_at) VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET uuid = EXCLUDED.uuid")
         .bind("$1", name)
@@ -166,6 +170,10 @@ public class DatabaseManager implements AutoCloseable {
   }
 
   public Mono<DatabaseResult<UUID>> getNameToUUID(String name) {
+    if (true) {
+      return Mono.empty();
+    }
+
     return useConnectionMono(conn -> conn.flatMapMany(it -> it.createStatement(
           "SELECT uuid, created_at FROM uuid_cache WHERE name = $1")
         .bind("$1", name)
@@ -182,6 +190,10 @@ public class DatabaseManager implements AutoCloseable {
   }
 
   public void putUUIDToSkin(UUID uuid, @Nullable SkinProperty skinProperty, LocalDateTime createdAt) {
+    if (true) {
+      return;
+    }
+
     useConnectionFlux(conn -> conn.flatMapMany(it -> it.createStatement(
           "INSERT INTO skin_cache (uuid, value, signature, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (uuid) DO UPDATE SET value = EXCLUDED.value, signature = EXCLUDED.signature")
         .bind("$1", uuid.toString())
@@ -195,6 +207,10 @@ public class DatabaseManager implements AutoCloseable {
   }
 
   public Mono<DatabaseResult<SkinProperty>> getUUIDToSkin(UUID uuid) {
+    if (true) {
+      return Mono.empty();
+    }
+
     return useConnectionMono(conn -> conn.flatMapMany(it -> it.createStatement(
           "SELECT value, signature, created_at FROM skin_cache WHERE uuid = $1")
         .bind("$1", uuid.toString())
