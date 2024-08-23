@@ -44,6 +44,8 @@ public class Main {
         server.activeLocalPort());
 
       server.blockUntilShutdown();
+
+      log.info("Server has been stopped.");
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
