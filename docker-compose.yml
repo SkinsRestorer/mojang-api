@@ -23,6 +23,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
+    tty: true
     healthcheck:
       test: ["CMD", "curl", "-f", "https://eclipse.skinsrestorer.net/health"]
       interval: 10s
