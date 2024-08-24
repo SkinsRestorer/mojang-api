@@ -51,17 +51,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-  autoheal:
-    restart: always
-    image: willfarrell/autoheal
-    environment:
-      - AUTOHEAL_CONTAINER_LABEL=all
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   db:
