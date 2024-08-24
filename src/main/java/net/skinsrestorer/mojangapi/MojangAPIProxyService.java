@@ -37,9 +37,12 @@ public class MojangAPIProxyService {
   private static final Gson GSON = new Gson();
   private final DatabaseManager databaseManager;
   public static final Duration CACHE_DURATION = Duration.ofMinutes(15);
-  public static final String CACHE_CONTROL = "public, max-age=%d".formatted(CACHE_DURATION.getSeconds());
   public static final ResponseHeaders CACHE_HEADERS = ResponseHeaders.builder(HttpStatus.OK)
-    .add(HttpHeaderNames.CACHE_CONTROL, CACHE_CONTROL)
+    .add(HttpHeaderNames.CACHE_CONTROL, ServerCacheControl.builder()
+      .cachePublic()
+      .maxAge(CACHE_DURATION)
+      .build()
+      .asHeaderValue())
     .contentType(MediaType.JSON)
     .build();
 
