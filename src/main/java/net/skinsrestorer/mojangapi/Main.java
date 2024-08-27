@@ -21,7 +21,7 @@ public class Main {
         Server.builder()
           .http(Integer.parseInt(System.getenv("SERVER_PORT")))
           .maxRequestLength(5 * 1024)  // 5 kB
-          .requestTimeout(Duration.ofSeconds(10))
+          .requestTimeout(Duration.ofSeconds(40))
           .idleTimeout(Duration.ofSeconds(30))
           .clientAddressTrustedProxyFilter(a -> true)
           .clientAddressSources(ClientAddressSource.ofHeader(HttpHeaderNames.X_FORWARDED_FOR))
