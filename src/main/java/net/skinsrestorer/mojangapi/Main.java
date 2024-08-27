@@ -4,11 +4,14 @@ import com.linecorp.armeria.common.HttpHeaderNames;
 import com.linecorp.armeria.server.ClientAddressSource;
 import com.linecorp.armeria.server.RedirectService;
 import com.linecorp.armeria.server.Server;
+import com.linecorp.armeria.server.auth.AuthService;
 import com.linecorp.armeria.server.docs.DocService;
 import com.linecorp.armeria.server.healthcheck.HealthCheckService;
+import com.linecorp.armeria.server.management.ManagementService;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 public class Main {
@@ -24,6 +27,10 @@ public class Main {
           .clientAddressSources(ClientAddressSource.ofHeader(HttpHeaderNames.X_FORWARDED_FOR))
           .annotatedService("/mojang", new MojangAPIProxyService(databaseManager))
           .service("/health", HealthCheckService.builder().build())
+          .serviceUnder("/internal/management/", ManagementService.of().decorate(AuthService.builder()
+            .addBasicAuth((ctx, data) -> CompletableFuture.completedStage(
+              data.username().equals("admin") && data.password().equals(System.getenv("MANAGEMENT_PASSWORD"))))
+            .newDecorator()))
           .service("/", new RedirectService("/docs"))
           .serviceUnder("/docs",
             DocService.builder()
