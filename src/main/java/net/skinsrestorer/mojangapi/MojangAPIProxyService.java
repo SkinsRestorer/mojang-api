@@ -32,6 +32,16 @@ import java.util.UUID;
 @CorsDecorator(origins = "*", allowedRequestMethods = HttpMethod.GET, credentialsAllowed = true, allowAllRequestHeaders = true)
 @RequiredArgsConstructor
 public class MojangAPIProxyService {
+  private static final HttpClient HTTP_CLIENT = HttpClient.create()
+    .bindAddress(LocalAddressProvider::getRandomLocalAddress)
+    .responseTimeout(Duration.ofSeconds(5))
+    .compress(true)
+    .headers(
+      h -> {
+        h.set(HttpHeaderNames.ACCEPT, "application/json");
+        h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
+        h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
+      });
   private static final String MOJANG_UUID_URL = "https://api.mojang.com/users/profiles/minecraft/%s";
   private static final String MOJANG_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false";
   private static final Gson GSON = new Gson();
@@ -66,16 +76,7 @@ public class MojangAPIProxyService {
   }
 
   private Mono<HttpResponse> crawlMojangUUID(String name) {
-    return HttpClient.create()
-      .bindAddress(LocalAddressProvider::getRandomLocalAddress)
-      .responseTimeout(Duration.ofSeconds(5))
-      .compress(true)
-      .headers(
-        h -> {
-          h.set(HttpHeaderNames.ACCEPT, "application/json");
-          h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
-          h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
-        })
+    return HTTP_CLIENT
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle((res, content) -> content.asString().map(responseText -> {
@@ -115,16 +116,7 @@ public class MojangAPIProxyService {
   }
 
   private Mono<HttpResponse> crawlMojangProfile(UUID uuid) {
-    return HttpClient.create()
-      .bindAddress(LocalAddressProvider::getRandomLocalAddress)
-      .responseTimeout(Duration.ofSeconds(5))
-      .compress(true)
-      .headers(
-        h -> {
-          h.set(HttpHeaderNames.ACCEPT, "application/json");
-          h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
-          h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
-        })
+    return HTTP_CLIENT
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(uuid))))
       .responseSingle((res, content) -> {
