@@ -15,6 +15,7 @@ import net.skinsrestorer.mojangapi.responses.MojangProfileResponse;
 import net.skinsrestorer.mojangapi.responses.MojangUUIDResponse;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.resources.ConnectionProvider;
 
 import javax.annotation.Nullable;
 import java.net.URI;
@@ -32,7 +33,14 @@ import java.util.UUID;
 @CorsDecorator(origins = "*", allowedRequestMethods = HttpMethod.GET, credentialsAllowed = true, allowAllRequestHeaders = true)
 @RequiredArgsConstructor
 public class MojangAPIProxyService {
-  private static final HttpClient HTTP_CLIENT = HttpClient.create()
+  private static final HttpClient HTTP_CLIENT = HttpClient.create(ConnectionProvider.builder("mojang-api")
+      .maxConnections(50)
+      .maxIdleTime(Duration.ofSeconds(20))
+      .maxLifeTime(Duration.ofSeconds(60))
+      .pendingAcquireTimeout(Duration.ofSeconds(60))
+      .evictInBackground(Duration.ofSeconds(120))
+      .disposeInactivePoolsInBackground(Duration.ofSeconds(120), Duration.ofSeconds(120))
+      .build())
     .bindAddress(LocalAddressProvider::getRandomLocalAddress)
     .responseTimeout(Duration.ofSeconds(5))
     .compress(true)
