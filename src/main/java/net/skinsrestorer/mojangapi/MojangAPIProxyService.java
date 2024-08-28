@@ -55,11 +55,15 @@ public class MojangAPIProxyService {
       .asHeaderValue())
     .contentType(MediaType.JSON)
     .build();
+  private static final HttpResponse INVALID_NAME_RESPONSE = HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_NAME));
+  private static final HttpResponse INVALID_UUID_RESPONSE = HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID));
+  private static final HttpResponse INTERNAL_ERROR_RESPONSE = HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR));
+  private static final HttpResponse INTERNAL_TIMEOUT_RESPONSE = HttpResponse.ofJson(HttpStatus.SERVICE_UNAVAILABLE, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_TIMEOUT));
 
   @Get("/uuid/{name}")
   public HttpResponse nameToUUID(@Param String name) {
     if (ValidationUtil.invalidMinecraftUsername(name)) {
-      return HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_NAME));
+      return INVALID_NAME_RESPONSE;
     }
 
     return HttpResponse.of(
@@ -70,8 +74,8 @@ public class MojangAPIProxyService {
         ))
         .switchIfEmpty(crawlMojangUUID(name))
         .doOnError(e -> log.error("Failed to fetch UUID for name {}", name, e))
-        .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
-        .timeout(Duration.ofSeconds(10), Mono.just(HttpResponse.ofJson(HttpStatus.SERVICE_UNAVAILABLE, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_TIMEOUT))))
+        .onErrorResume(e -> Mono.just(INTERNAL_ERROR_RESPONSE))
+        .timeout(Duration.ofSeconds(10), Mono.just(INTERNAL_TIMEOUT_RESPONSE))
         .toFuture());
   }
 
@@ -108,11 +112,11 @@ public class MojangAPIProxyService {
           ))
           .switchIfEmpty(crawlMojangProfile(value))
           .doOnError(e -> log.error("Failed to fetch skin for UUID {}", value, e))
-          .onErrorResume(e -> Mono.just(HttpResponse.ofJson(HttpStatus.INTERNAL_SERVER_ERROR, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_ERROR))))
-          .timeout(Duration.ofSeconds(10), Mono.just(HttpResponse.ofJson(HttpStatus.SERVICE_UNAVAILABLE, new ErrorResponse(ErrorResponse.ErrorType.INTERNAL_TIMEOUT))))
+          .onErrorResume(e -> Mono.just(INTERNAL_ERROR_RESPONSE))
+          .timeout(Duration.ofSeconds(10), Mono.just(INTERNAL_TIMEOUT_RESPONSE))
           .toFuture()
         ))
-      .orElseGet(() -> HttpResponse.ofJson(HttpStatus.BAD_REQUEST, new ErrorResponse(ErrorResponse.ErrorType.INVALID_UUID)));
+      .orElse(INVALID_UUID_RESPONSE);
   }
 
   private Mono<HttpResponse> crawlMojangProfile(UUID uuid) {
