@@ -25,8 +25,8 @@ dependencies {
   implementation 'com.google.code.findbugs:jsr305:3.0.2'
   implementation 'com.linecorp.armeria:armeria'
   runtimeOnly 'org.slf4j:slf4j-simple:2.0.16'
-  implementation "io.projectreactor.netty:reactor-netty-core:1.1.22"
-  implementation "io.projectreactor.netty:reactor-netty-http:1.1.22"
+  implementation "io.projectreactor.netty:reactor-netty-core:1.1.23"
+  implementation "io.projectreactor.netty:reactor-netty-http:1.1.23"
   implementation 'com.google.code.gson:gson:2.11.0'
   implementation 'org.postgresql:r2dbc-postgresql:1.0.6.RELEASE'
   implementation 'io.r2dbc:r2dbc-pool:1.0.1.RELEASE'
