@@ -27,7 +27,7 @@ dependencies {
   runtimeOnly 'org.slf4j:slf4j-simple:2.0.16'
   implementation "io.projectreactor.netty:reactor-netty-core:1.2.2"
   implementation "io.projectreactor.netty:reactor-netty-http:1.2.2"
-  implementation 'com.google.code.gson:gson:2.12.0'
+  implementation 'com.google.code.gson:gson:2.12.1'
   implementation 'org.postgresql:r2dbc-postgresql:1.0.7.RELEASE'
   implementation 'io.r2dbc:r2dbc-pool:1.0.2.RELEASE'
 }
