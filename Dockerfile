@@ -8,7 +8,7 @@ WORKDIR /mojangapi
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked --mount=type=cache,target=/mojangapi/.gradle,sharing=locked --mount=type=cache,target=/mojangapi/work,sharing=locked \
     ./gradlew build --stacktrace
 
-FROM eclipse-temurin:24_36-jdk-alpine AS jre-no-javac-builder
+FROM eclipse-temurin:24.0.1_9-jdk-alpine AS jre-no-javac-builder
 
 # Install necessery dependencies
 RUN apk add --no-progress --no-cache binutils tzdata
