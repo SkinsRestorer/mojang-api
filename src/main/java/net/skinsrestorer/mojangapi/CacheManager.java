@@ -15,9 +15,11 @@ import java.util.concurrent.TimeUnit;
 public class CacheManager implements AutoCloseable {
   private final Cache<String, DatabaseResult<UUID>> nameToUUIDCache = Caffeine.newBuilder()
     .expireAfterWrite(6, TimeUnit.HOURS)
+    .maximumSize(10_000)
     .build();
   private final Cache<UUID, DatabaseResult<SkinProperty>> uuidToSkinCache = Caffeine.newBuilder()
     .expireAfterWrite(6, TimeUnit.HOURS)
+    .maximumSize(10_000)
     .build();
 
   public void putNameToUUID(String name, @Nullable UUID uuid, LocalDateTime createdAt) {
