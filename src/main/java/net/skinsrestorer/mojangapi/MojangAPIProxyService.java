@@ -21,6 +21,7 @@ import javax.annotation.Nullable;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -78,7 +79,11 @@ public class MojangAPIProxyService {
       cacheManager.getNameToUUID(name)
         .map(cacheData -> HttpResponse.ofJson(
           CACHE_HEADERS,
-          new UUIDResponse(cacheData.value() != null, cacheData.value())
+          new UUIDResponse(
+            new CacheData(CacheState.HIT, cacheData.createdAt()),
+            cacheData.value() != null,
+            cacheData.value()
+          )
         ))
         .switchIfEmpty(crawlMojangUUID(name))
         .doOnError(e -> log.error("Failed to fetch UUID for name {}", name, e))
@@ -100,7 +105,11 @@ public class MojangAPIProxyService {
 
         return HttpResponse.ofJson(
           CACHE_HEADERS,
-          new UUIDResponse(uuid != null, uuid)
+          new UUIDResponse(
+            new CacheData(CacheState.MISS, time.toEpochSecond(ZoneOffset.UTC)),
+            uuid != null,
+            uuid
+          )
         );
       }));
   }
@@ -112,11 +121,13 @@ public class MojangAPIProxyService {
           .map(cacheData -> HttpResponse.ofJson(
             CACHE_HEADERS,
             new ProfileResponse(
+              new CacheData(CacheState.HIT, cacheData.createdAt()),
               cacheData.value() != null,
               cacheData.value() != null ? new ProfileResponse.SkinProperty(
                 cacheData.value().value(),
                 cacheData.value().signature()
-              ) : null)
+              ) : null
+            )
           ))
           .switchIfEmpty(crawlMojangProfile(value))
           .doOnError(e -> log.error("Failed to fetch skin for UUID {}", value, e))
@@ -138,7 +149,11 @@ public class MojangAPIProxyService {
 
           return Mono.just(HttpResponse.ofJson(
             CACHE_HEADERS,
-            new ProfileResponse(false, null)
+            new ProfileResponse(
+              new CacheData(CacheState.MISS, time.toEpochSecond(ZoneOffset.UTC)),
+              false,
+              null
+            )
           ));
         }
 
@@ -155,10 +170,14 @@ public class MojangAPIProxyService {
 
           return HttpResponse.ofJson(
             CACHE_HEADERS,
-            new ProfileResponse(property != null, property != null ? new ProfileResponse.SkinProperty(
-              property.getValue(),
-              property.getSignature()
-            ) : null)
+            new ProfileResponse(
+              new CacheData(CacheState.MISS, time.toEpochSecond(ZoneOffset.UTC)),
+              property != null,
+              property != null ? new ProfileResponse.SkinProperty(
+                property.getValue(),
+                property.getSignature()
+              ) : null
+            )
           );
         });
       });
@@ -173,14 +192,25 @@ public class MojangAPIProxyService {
     }
   }
 
-  public record UUIDResponse(boolean exists, @Nullable UUID uuid) {
+  public record UUIDResponse(CacheData cacheData, boolean exists, @Nullable UUID uuid) {
   }
 
-  public record ProfileResponse(boolean exists, @Nullable SkinProperty skinProperty) {
+  public record ProfileResponse(CacheData cacheData, boolean exists, @Nullable SkinProperty skinProperty) {
     public record SkinProperty(
       String value,
       String signature
     ) {
     }
+  }
+
+  public enum CacheState {
+    HIT,
+    MISS
+  }
+
+  public record CacheData(
+    CacheState state,
+    long createdAt
+  ) {
   }
 }
