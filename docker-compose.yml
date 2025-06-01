@@ -1,23 +1,4 @@
 services:
-  db:
-    image: pgautoupgrade/pgautoupgrade:latest
-    restart: always
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 30s
-      retries: 3
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
-    ports:
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - db:/var/lib/postgresql/data
   app:
     build:
       context: .
@@ -38,20 +19,8 @@ services:
     env_file:
       - .env
     environment:
-      - JDBC_DATABASE_HOST=127.0.0.1
-      - JDBC_DATABASE_PORT=5432
-      - JDBC_DATABASE_NAME=postgres
-      - JDBC_DATABASE_USERNAME=postgres
-      - JDBC_DATABASE_PASSWORD=postgres
       - SERVER_PORT=8080
     logging:
       options:
         max-size: "10m"
         max-file: "3"
-    depends_on:
-      db:
-        condition: service_healthy
-
-volumes:
-  db:
-    driver: local

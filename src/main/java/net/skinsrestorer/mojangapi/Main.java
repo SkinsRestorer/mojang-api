@@ -16,7 +16,7 @@ import java.util.concurrent.CompletableFuture;
 @Slf4j
 public class Main {
   public static void main(String[] args) {
-    try (var databaseManager = new DatabaseManager()) {
+    try (var databaseManager = new CacheManager()) {
       final Server server =
         Server.builder()
           .http(Integer.parseInt(System.getenv("SERVER_PORT")))

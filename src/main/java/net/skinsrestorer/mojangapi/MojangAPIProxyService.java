@@ -53,7 +53,7 @@ public class MojangAPIProxyService {
   private static final String MOJANG_UUID_URL = "https://api.mojang.com/users/profiles/minecraft/%s";
   private static final String MOJANG_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false";
   private static final Gson GSON = new Gson();
-  private final DatabaseManager databaseManager;
+  private final CacheManager cacheManager;
   public static final Duration CACHE_DURATION = Duration.ofMinutes(15);
   public static final ResponseHeaders CACHE_HEADERS = ResponseHeaders.builder(HttpStatus.OK)
     .add(HttpHeaderNames.CACHE_CONTROL, ServerCacheControl.builder()
@@ -75,7 +75,7 @@ public class MojangAPIProxyService {
     }
 
     return HttpResponse.of(
-      databaseManager.getNameToUUID(name)
+      cacheManager.getNameToUUID(name)
         .map(cacheData -> HttpResponse.ofJson(
           CACHE_HEADERS,
           new UUIDResponse(cacheData.value() != null, cacheData.value())
@@ -96,7 +96,7 @@ public class MojangAPIProxyService {
         var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
 
         var time = LocalDateTime.now();
-        databaseManager.putNameToUUID(name, uuid, time);
+        cacheManager.putNameToUUID(name, uuid, time);
 
         return HttpResponse.ofJson(
           CACHE_HEADERS,
@@ -108,7 +108,7 @@ public class MojangAPIProxyService {
   @Get("/skin/{uuid}")
   public HttpResponse uuidToSkin(@Param String uuid) {
     return UUIDUtils.tryParseUniqueId(uuid).map(value ->
-        HttpResponse.of(databaseManager.getUUIDToSkin(value)
+        HttpResponse.of(cacheManager.getUUIDToSkin(value)
           .map(cacheData -> HttpResponse.ofJson(
             CACHE_HEADERS,
             new ProfileResponse(
@@ -134,7 +134,7 @@ public class MojangAPIProxyService {
       .responseSingle((res, content) -> {
         if (res.status().code() == 204) {
           var time = LocalDateTime.now();
-          databaseManager.putUUIDToSkin(uuid, null, time);
+          cacheManager.putUUIDToSkin(uuid, null, time);
 
           return Mono.just(HttpResponse.ofJson(
             CACHE_HEADERS,
@@ -150,8 +150,8 @@ public class MojangAPIProxyService {
             .orElse(null);
 
           var time = LocalDateTime.now();
-          databaseManager.putUUIDToSkin(uuid, property == null ? null
-            : new DatabaseManager.SkinProperty(property.getValue(), property.getSignature()), time);
+          cacheManager.putUUIDToSkin(uuid, property == null ? null
+            : new CacheManager.SkinProperty(property.getValue(), property.getSignature()), time);
 
           return HttpResponse.ofJson(
             CACHE_HEADERS,
