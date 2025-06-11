@@ -14,8 +14,8 @@ repositories {
 
 dependencyManagement {
   imports {
-    mavenBom 'io.micrometer:micrometer-bom:1.15.0'
-    mavenBom 'io.netty:netty-bom:4.2.1.Final'
+    mavenBom 'io.micrometer:micrometer-bom:1.15.1'
+    mavenBom 'io.netty:netty-bom:4.2.2.Final'
     mavenBom 'com.linecorp.armeria:armeria-bom:1.32.5'
     mavenBom 'io.github.resilience4j:resilience4j-bom:2.3.0'
   }
@@ -25,10 +25,10 @@ dependencies {
   implementation 'com.google.code.findbugs:jsr305:3.0.2'
   implementation 'com.linecorp.armeria:armeria'
   runtimeOnly 'org.slf4j:slf4j-simple:2.0.17'
-  implementation "io.projectreactor.netty:reactor-netty-core:1.2.6"
-  implementation "io.projectreactor.netty:reactor-netty-http:1.2.6"
+  implementation "io.projectreactor.netty:reactor-netty-core:1.2.7"
+  implementation "io.projectreactor.netty:reactor-netty-http:1.2.7"
   implementation 'com.google.code.gson:gson:2.13.1'
-  implementation 'com.github.ben-manes.caffeine:caffeine:3.2.0'
+  implementation 'com.github.ben-manes.caffeine:caffeine:3.2.1'
 }
 
 application {
