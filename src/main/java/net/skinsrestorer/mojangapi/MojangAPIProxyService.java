@@ -92,6 +92,10 @@ public class MojangAPIProxyService {
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle((res, content) -> content.asString().map(responseText -> {
+        if (res.status().codeClass() != io.netty.handler.codec.http.HttpStatusClass.SUCCESS) {
+          return INTERNAL_ERROR_RESPONSE;
+        }
+
         var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
         var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
 
@@ -132,6 +136,10 @@ public class MojangAPIProxyService {
       .get()
       .uri(URI.create(String.format(MOJANG_PROFILE_URL, UUIDUtils.convertToNoDashes(uuid))))
       .responseSingle((res, content) -> {
+        if (res.status().codeClass() != io.netty.handler.codec.http.HttpStatusClass.SUCCESS) {
+          return Mono.just(INTERNAL_ERROR_RESPONSE);
+        }
+
         if (res.status().code() == 204) {
           var time = LocalDateTime.now();
           cacheManager.putUUIDToSkin(uuid, null, time);
