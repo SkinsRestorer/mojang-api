@@ -50,7 +50,7 @@ public class MojangAPIProxyService {
         h.set(HttpHeaderNames.ACCEPT_LANGUAGE, "en-US,en");
         h.set(HttpHeaderNames.USER_AGENT, "SRMojangAPI");
       });
-  private static final String MOJANG_UUID_URL = "https://api.mojang.com/users/profiles/minecraft/%s";
+  private static final String MOJANG_UUID_URL = "https://api.minecraftservices.com/minecraft/profile/lookup/name/%s";
   private static final String MOJANG_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false";
   private static final Gson GSON = new Gson();
   private final CacheManager cacheManager;
