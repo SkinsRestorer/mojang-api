@@ -92,12 +92,13 @@ public class MojangAPIProxyService {
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
       .responseSingle((res, content) -> content.asString().map(responseText -> {
-        if (res.status().codeClass() != io.netty.handler.codec.http.HttpStatusClass.SUCCESS) {
+        boolean isNotFound = res.status().code() == 404;
+        if (!isNotFound && res.status().codeClass() != io.netty.handler.codec.http.HttpStatusClass.SUCCESS) {
           return INTERNAL_ERROR_RESPONSE;
         }
 
         var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
-        var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
+        var uuid = isNotFound || response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
 
         var time = LocalDateTime.now();
         cacheManager.putNameToUUID(name, uuid, time);
