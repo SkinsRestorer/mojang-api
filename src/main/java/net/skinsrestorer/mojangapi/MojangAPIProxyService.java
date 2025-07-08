@@ -91,23 +91,34 @@ public class MojangAPIProxyService {
     return HTTP_CLIENT
       .get()
       .uri(URI.create(String.format(MOJANG_UUID_URL, name)))
-      .responseSingle((res, content) -> content.asString().map(responseText -> {
-        boolean isNotFound = res.status().code() == 404;
-        if (!isNotFound && res.status().codeClass() != io.netty.handler.codec.http.HttpStatusClass.SUCCESS) {
-          return INTERNAL_ERROR_RESPONSE;
+      .responseSingle((res, content) -> {
+        if (res.status().code() == 404) {
+          var time = LocalDateTime.now();
+          cacheManager.putNameToUUID(name, null, time);
+
+          return Mono.just(HttpResponse.ofJson(
+            CACHE_HEADERS,
+            new UUIDResponse(false, null)
+          ));
         }
 
-        var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
-        var uuid = isNotFound || response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
+        if (res.status().codeClass() != io.netty.handler.codec.http.HttpStatusClass.SUCCESS) {
+          return Mono.just(INTERNAL_ERROR_RESPONSE);
+        }
 
-        var time = LocalDateTime.now();
-        cacheManager.putNameToUUID(name, uuid, time);
+        return content.asString().map(responseText -> {
+          var response = GSON.fromJson(responseText, MojangUUIDResponse.class);
+          var uuid = response.getId() == null ? null : UUIDUtils.convertToDashed(response.getId());
 
-        return HttpResponse.ofJson(
-          CACHE_HEADERS,
-          new UUIDResponse(uuid != null, uuid)
-        );
-      }));
+          var time = LocalDateTime.now();
+          cacheManager.putNameToUUID(name, uuid, time);
+
+          return HttpResponse.ofJson(
+            CACHE_HEADERS,
+            new UUIDResponse(uuid != null, uuid)
+          );
+        });
+      });
   }
 
   @Get("/skin/{uuid}")
