@@ -1,14 +1,7 @@
 import {httpClient} from '../utils/http-client';
 import {invalidMinecraftUsername} from '../utils/validation-utils';
 import {convertToNoDashes, tryParseUUID} from '../utils/uuid-utils';
-import {
-  ErrorType,
-  MOJANG_API,
-  MojangProfileResponse,
-  MojangUUIDResponse,
-  ProfileResponse,
-  UUIDResponse
-} from '../utils/types';
+import {ErrorType, MOJANG_API, MojangProfileResponse, MojangUUIDResponse,} from '../utils/types';
 import {createCacheManager} from '../cache-manager';
 import {createRoute, OpenAPIHono, z} from "@hono/zod-openapi";
 
@@ -48,9 +41,12 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              exists: z.boolean(),
-              uuid: z.string().nullable()
-            })
+              exists: z.literal(true),
+              uuid: z.string()
+            }).or(z.object({
+              exists: z.literal(false),
+              uuid: z.null()
+            })),
           },
         },
       },
@@ -103,10 +99,17 @@ mojangApiRouter.openapi(
           c.header(key, value);
         });
 
-        return c.json({
-          exists: cachedData.value !== null,
-          uuid: cachedData.value
-        } satisfies UUIDResponse, 200);
+        if (cachedData.value === null) {
+          return c.json({
+            exists: false,
+            uuid: null
+          } as const, 200);
+        } else {
+          return c.json({
+            exists: true,
+            uuid: cachedData.value
+          } as const, 200);
+        }
       }
 
       // If not in cache, call Mojang API
@@ -130,10 +133,17 @@ mojangApiRouter.openapi(
         c.header(key, value);
       });
 
-      return c.json({
-        exists: uuid !== null,
-        uuid
-      } satisfies UUIDResponse, 200);
+      if (uuid === null) {
+        return c.json({
+          exists: false,
+          uuid: null
+        } as const, 200);
+      } else {
+        return c.json({
+          exists: true,
+          uuid
+        } as const, 200);
+      }
     } catch (error: unknown) {
       console.error(`Error fetching UUID for name ${name}:`, error);
 
@@ -174,12 +184,15 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              exists: z.boolean(),
+              exists: z.literal(true),
               skinProperty: z.object({
                 value: z.string(),
                 signature: z.string()
-              }).nullable()
-            })
+              })
+            }).or(z.object({
+              exists: z.literal(false),
+              skinProperty: z.null()
+            }))
           },
         },
       },
@@ -232,10 +245,17 @@ mojangApiRouter.openapi(
           c.header(key, value);
         });
 
-        return c.json({
-          exists: cachedData.value !== null,
-          skinProperty: cachedData.value
-        } satisfies ProfileResponse, 200);
+        if (cachedData.value === null) {
+          return c.json({
+            exists: false,
+            skinProperty: null
+          } as const, 200);
+        } else {
+          return c.json({
+            exists: true,
+            skinProperty: cachedData.value
+          } as const, 200);
+        }
       }
 
       // If not in cache, call Mojang API
@@ -251,7 +271,7 @@ mojangApiRouter.openapi(
           c.header(key, value);
         });
 
-        return c.json({exists: false, skinProperty: null}, 200);
+        return c.json({exists: false, skinProperty: null} as const, 200);
       }
 
       // Handle other non-success responses
@@ -275,13 +295,21 @@ mojangApiRouter.openapi(
         c.header(key, value);
       });
 
-      return c.json({
-        exists: property !== null,
-        skinProperty: property ? {
-          value: property.value,
-          signature: property.signature
-        } : null
-      } satisfies ProfileResponse, 200);
+      if (property === null) {
+        return c.json({
+          exists: false,
+          skinProperty: null
+        } as const, 200);
+      } else {
+        // Return the skin property if it exists
+        return c.json({
+          exists: true,
+          skinProperty: {
+            value: property.value,
+            signature: property.signature
+          }
+        } as const, 200);
+      }
     } catch (error: unknown) {
       console.error(`Error fetching skin for UUID ${uuidParsed}:`, error);
 

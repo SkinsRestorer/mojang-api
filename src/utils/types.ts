@@ -13,16 +13,6 @@ export enum ErrorType {
   INTERNAL_ERROR = 'INTERNAL_ERROR'
 }
 
-export interface UUIDResponse {
-  exists: boolean;
-  uuid: string | null;
-}
-
-export interface ProfileResponse {
-  exists: boolean;
-  skinProperty: SkinProperty | null;
-}
-
 export interface SkinProperty {
   value: string;
   signature: string;
