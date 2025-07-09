@@ -43,3 +43,4 @@ package-lock.json
 
 .idea
 .gradle
+.env
