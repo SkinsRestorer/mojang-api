@@ -4,6 +4,7 @@ import {convertToNoDashes, tryParseUUID} from '../utils/uuid-utils';
 import {ErrorType, MOJANG_API, MojangProfileResponse, MojangUUIDResponse,} from '../utils/types';
 import {createCacheManager} from '../cache-manager';
 import {createRoute, OpenAPIHono, z} from "@hono/zod-openapi";
+import * as console from "node:console";
 
 /**
  * Router for Mojang API endpoints
@@ -114,6 +115,7 @@ mojangApiRouter.openapi(
       const isNotFound = response.status === 404;
       const isSuccess = response.status >= 200 && response.status < 300;
       if (!isNotFound && !isSuccess) {
+        console.error(`Error fetching UUID for name ${name}:`, response.status, response.statusText);
         return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
       }
 
@@ -256,6 +258,7 @@ mojangApiRouter.openapi(
 
       // Handle other non-success responses
       if (response.status < 200 || response.status >= 300) {
+        console.error(`Error fetching skin for UUID ${uuidParsed}:`, response.status, response.statusText);
         return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
       }
 
