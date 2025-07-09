@@ -4,6 +4,7 @@ import {swagger} from "@elysiajs/swagger";
 import {mojangApiRouter} from "./routes/mojang-api";
 import {healthRouter} from "./routes/health";
 import {Generator, rateLimit} from "elysia-rate-limit";
+import {logger} from "@bogeychan/elysia-logger";
 
 // Get server port from environment variables or use default
 const PORT = process.env.SERVER_PORT ? parseInt(process.env.SERVER_PORT) : 3000;
@@ -20,6 +21,7 @@ const app = new Elysia()
     max: 1000, // Maximum requests per IP
     duration: 60 * 1000, // Time window in milliseconds
   }))
+  .use(logger())
   // Add CORS middleware
   .use(
     cors({
@@ -51,8 +53,6 @@ const app = new Elysia()
   .use(healthRouter)
   // Global error handler
   .onError(({code, error, set}) => {
-    console.error(`Error [${code}]:`, error);
-
     if (code === "NOT_FOUND") {
       set.status = 404;
       return {error: "Not Found"};
