@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import {getRandomLocalAddress} from './local-address-provider';
+import {getRandomLocalAddressHost} from "./local-address-provider";
 
 /**
  * Maximum request timeout in milliseconds
@@ -21,7 +21,7 @@ export const httpClient = {
 
     try {
       // Get a random local address for the outgoing connection
-      const localAddress = getRandomLocalAddress();
+      const localAddress = getRandomLocalAddressHost();
 
       return await fetch(url, {
         method: 'GET',
