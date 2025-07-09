@@ -1,5 +1,8 @@
 import fetch from 'node-fetch';
 import {getRandomLocalAddressHost} from "./local-address-provider";
+import axios from "axios";
+import * as http from "node:http";
+import * as https from "node:https";
 
 /**
  * Maximum request timeout in milliseconds
@@ -16,26 +19,23 @@ export const httpClient = {
    * @returns A promise that resolves to the response object
    */
   async get(url: string) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    // Get a random local address for the outgoing connection
+    const localAddress = getRandomLocalAddressHost();
 
-    try {
-      // Get a random local address for the outgoing connection
-      const localAddress = getRandomLocalAddressHost();
+    const httpAgent = new http.Agent({localAddress});
+    const httpsAgent = new https.Agent({localAddress});
 
-      return await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Accept-Language': 'en-US,en',
-          'User-Agent': 'SRMojangAPI'
-        },
-        compress: true,
-        signal: controller.signal,
-        //localAddress: localAddress.address
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    return await axios.get(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en',
+        'User-Agent': 'SRMojangAPI'
+      },
+      httpAgent,
+      httpsAgent,
+      timeout: 30_000,
+      validateStatus: () => true, // Accept all status codes; never throw
+    });
   }
 };

@@ -10,6 +10,7 @@
     "@bogeychan/elysia-logger": "^0.1.8",
     "@elysiajs/cors": "latest",
     "@elysiajs/swagger": "latest",
+    "axios": "^1.10.0",
     "elysia": "latest",
     "elysia-rate-limit": "^4.4.0",
     "lru-cache": "latest"

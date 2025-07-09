@@ -43,12 +43,13 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
       const response = await httpClient.get(mojangUrl);
 
       const isNotFound = response.status === 404;
-      if (!isNotFound && !response.ok) {
+      const isSuccess = response.status >= 200 && response.status < 300;
+      if (!isNotFound && !isSuccess) {
         set.status = 500;
         return { error: ErrorType.INTERNAL_ERROR };
       }
 
-      const responseData = await response.json() as MojangUUIDResponse;
+      const responseData = response.data as MojangUUIDResponse;
       const uuid = isNotFound || !responseData.id ? null : tryParseUUID(responseData.id);
 
       // Cache the result
@@ -129,12 +130,12 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
       }
 
       // Handle other non-success responses
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         set.status = 500;
         return { error: ErrorType.INTERNAL_ERROR };
       }
 
-      const responseData = await response.json() as MojangProfileResponse;
+      const responseData = await response.data as MojangProfileResponse;
 
       // Find the textures property
       const property = responseData.properties?.find(p => p.name === 'textures') || null;
