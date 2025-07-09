@@ -15,6 +15,7 @@
     "dotenv-flow": "^4.1.0",
     "hono": "^4.8.4",
     "hono-rate-limiter": "^0.4.2",
-    "lru-cache": "latest"
+    "lru-cache": "latest",
+    "tsx": "^4.20.3"
   }
 }
