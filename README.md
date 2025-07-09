@@ -1,35 +1,15 @@
-# mojang-api
+# Elysia with Bun runtime
 
-Public Mojang API proxy with automatic caching.
-See https://eclipse.skinsrestorer.net/docs/ for usage & documentation
-
-## Sysctl
-
-You need to change your `sysctl.conf` file to allow this:
-
+## Getting Started
+To get started with this template, simply paste this command into your terminal:
 ```bash
-cat <<EOF > /etc/sysctl.d/10-mojangapi.conf
-net.ipv4.ip_forward=1
-net.ipv6.conf.all.forwarding=1
-net.ipv6.ip_nonlocal_bind = 1
-EOF
+bun create elysia ./elysia-example
 ```
 
-## Add ipv6 range to interface
-
+## Development
+To start the development server run:
 ```bash
-ip route add local <ip here>::/64 dev eth0
+bun run dev
 ```
 
-## Docker daemon config
-
-```bash
-cat <<EOF > /etc/docker/daemon.json
-{
-  "ipv6": true,
-  "fixed-cidr-v6": "2001:db8:1::/64",
-  "experimental": true,
-  "ip6tables": true
-}
-EOF
-```
+Open http://localhost:3000/ with your browser to see the result.
