@@ -1,4 +1,3 @@
-import {Hono} from 'hono';
 import {httpClient} from '../utils/http-client';
 import {invalidMinecraftUsername} from '../utils/validation-utils';
 import {tryParseUUID, convertToNoDashes} from '../utils/uuid-utils';
@@ -11,14 +10,12 @@ import {
   UUIDResponse
 } from '../utils/types';
 import {createCacheManager} from '../cache-manager';
-import {describeRoute} from 'hono-openapi';
-import {resolver} from 'hono-openapi/zod';
-import {z} from 'zod';
+import {createRoute, OpenAPIHono, z} from "@hono/zod-openapi";
 
 /**
  * Router for Mojang API endpoints
  */
-export const mojangApiRouter = new Hono();
+export const mojangApiRouter = new OpenAPIHono();
 
 // Create cache manager
 const cacheManager = createCacheManager();
@@ -26,8 +23,15 @@ const cacheManager = createCacheManager();
 /**
  * Convert Minecraft username to UUID
  */
-mojangApiRouter.get('/uuid/:name',
-  describeRoute({
+mojangApiRouter.openapi(
+  createRoute({
+    method: 'get',
+    path: '/uuid/:name',
+    request: {
+      params: z.object({
+        name: z.string().describe('Minecraft username to convert to UUID')
+      }),
+    },
     tags: ['mojang'],
     description: 'Convert a Minecraft username to UUID',
     responses: {
@@ -35,19 +39,17 @@ mojangApiRouter.get('/uuid/:name',
         description: 'Successful response',
         content: {
           'application/json': {
-            schema: resolver(
-              z.object({
-                exists: z.boolean(),
-                uuid: z.string().nullable()
-              })
-            )
+            schema: z.object({
+              exists: z.boolean(),
+              uuid: z.string().nullable()
+            })
           },
         },
       },
     },
   }),
   async (c) => {
-    const name = c.req.param('name');
+    const {name} = c.req.valid('param');
 
     // Validate username
     if (invalidMinecraftUsername(name)) {
@@ -109,8 +111,15 @@ mojangApiRouter.get('/uuid/:name',
 /**
  * Get skin data for a Minecraft UUID
  */
-mojangApiRouter.get('/skin/:uuid',
-  describeRoute({
+mojangApiRouter.openapi(
+  createRoute({
+    method: 'get',
+    path: '/skin/:uuid',
+    request: {
+      params: z.object({
+        uuid: z.string().describe('Minecraft UUID to get skin data for')
+      }),
+    },
     tags: ['mojang'],
     description: 'Get skin data for a Minecraft UUID',
     responses: {
@@ -118,31 +127,29 @@ mojangApiRouter.get('/skin/:uuid',
         description: 'Successful response',
         content: {
           'application/json': {
-            schema: resolver(
-              z.object({
-                exists: z.boolean(),
-                skinProperty: z.object({
-                  value: z.string(),
-                  signature: z.string()
-                }).nullable()
-              })
-            )
+            schema: z.object({
+              exists: z.boolean(),
+              skinProperty: z.object({
+                value: z.string(),
+                signature: z.string()
+              }).nullable()
+            })
           },
         },
       },
     },
   }),
   async (c) => {
-    const uuidParam = c.req.param('uuid');
-    const uuid = tryParseUUID(uuidParam);
+    const {uuid} = c.req.valid('param');
+    const uuidParsed = tryParseUUID(uuid);
 
-    if (!uuid) {
+    if (!uuidParsed) {
       return c.json({error: ErrorType.INVALID_UUID}, 400);
     }
 
     try {
       // Check cache first
-      const cachedData = await cacheManager.getUUIDToSkin(uuid);
+      const cachedData = await cacheManager.getUUIDToSkin(uuidParsed);
       if (cachedData) {
         // Set cache headers
         Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
@@ -156,12 +163,12 @@ mojangApiRouter.get('/skin/:uuid',
       }
 
       // If not in cache, call Mojang API
-      const mojangUrl = MOJANG_API.PROFILE_URL.replace('%s', convertToNoDashes(uuid));
+      const mojangUrl = MOJANG_API.PROFILE_URL.replace('%s', convertToNoDashes(uuidParsed));
       const response = await httpClient.get(mojangUrl);
 
       // Handle 204 No Content (profile doesn't exist)
       if (response.status === 204) {
-        cacheManager.putUUIDToSkin(uuid, null, new Date());
+        cacheManager.putUUIDToSkin(uuidParsed, null, new Date());
 
         // Set cache headers
         Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
@@ -182,7 +189,7 @@ mojangApiRouter.get('/skin/:uuid',
       const property = responseData.properties?.find(p => p.name === 'textures') || null;
 
       // Cache the result
-      cacheManager.putUUIDToSkin(uuid, property ? {
+      cacheManager.putUUIDToSkin(uuidParsed, property ? {
         value: property.value,
         signature: property.signature
       } : null, new Date());
@@ -200,7 +207,7 @@ mojangApiRouter.get('/skin/:uuid',
         } : null
       } satisfies ProfileResponse);
     } catch (error: unknown) {
-      console.error(`Error fetching skin for UUID ${uuid}:`, error);
+      console.error(`Error fetching skin for UUID ${uuidParsed}:`, error);
 
       // Check if it's a timeout error
       if (error instanceof Error && error.name === 'AbortError') {

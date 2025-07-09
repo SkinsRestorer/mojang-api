@@ -1,16 +1,15 @@
-import {Hono} from 'hono';
-import {describeRoute} from "hono-openapi";
-import {resolver} from "hono-openapi/zod";
-import {z} from "zod";
+import {createRoute, OpenAPIHono, z} from "@hono/zod-openapi";
 
 /**
  * Router for health check endpoints
  */
-export const healthRouter = new Hono();
+export const healthRouter = new OpenAPIHono();
 
 // Health check endpoint
-healthRouter.get('/',
-  describeRoute({
+healthRouter.openapi(
+  createRoute({
+    method: 'get',
+    path: '/',
     tags: ['health'],
     description: 'Health check endpoint',
     responses: {
@@ -18,11 +17,9 @@ healthRouter.get('/',
         description: 'Successful response',
         content: {
           'application/json': {
-            schema: resolver(
-              z.object({
-                status: z.string().describe('Health status of the service'),
-              })
-            )
+            schema: z.object({
+              status: z.string().describe('Health status of the service'),
+            })
           },
         },
       },

@@ -10,14 +10,11 @@
   "dependencies": {
     "@hono/node-server": "^1.8.2",
     "@hono/swagger-ui": "^0.2.1",
-    "@hono/zod-validator": "^0.7.0",
+    "@hono/zod-openapi": "^0.19.9",
     "axios": "^1.10.0",
     "dotenv-flow": "^4.1.0",
     "hono": "^4.8.4",
-    "hono-openapi": "^0.4.8",
     "hono-rate-limiter": "^0.4.2",
-    "lru-cache": "latest",
-    "zod": "^3.25.76",
-    "zod-openapi": "^5.0.1"
+    "lru-cache": "latest"
   }
 }
