@@ -26,7 +26,7 @@ const cacheManager = createCacheManager();
 mojangApiRouter.openapi(
   createRoute({
     method: 'get',
-    path: '/uuid/:name',
+    path: '/uuid/{name}',
     request: {
       params: z.object({
         name: z.string()
@@ -152,7 +152,7 @@ mojangApiRouter.openapi(
 mojangApiRouter.openapi(
   createRoute({
     method: 'get',
-    path: '/skin/:uuid',
+    path: '/skin/{uuid}',
     request: {
       params: z.object({
         uuid: z.string()
