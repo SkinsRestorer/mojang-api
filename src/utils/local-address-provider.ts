@@ -1,5 +1,5 @@
-const IP_BASE = process.env.IP_BASE!;
-const IP_RANGE = parseInt(process.env.IP_RANGE!);
+const IP_BASE = process.env.IP_BASE ?? "0.0.0.0";
+const IP_RANGE = parseInt(process.env.IP_RANGE ?? "0");
 
 if (!IP_BASE || isNaN(IP_RANGE)) {
   throw new Error("IP_BASE and IP_RANGE environment variables must be set.");

@@ -1,16 +1,17 @@
-FROM oven/bun
+FROM node:20-slim AS base
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable
 
 WORKDIR /app
 
 COPY package.json .
-COPY bun.lock .
+COPY pnpm-lock.yaml .
 
-RUN bun install --production
+RUN pnpm install
 
 COPY src src
 COPY tsconfig.json .
 
 ENV NODE_ENV production
-CMD ["bun", "src/index.ts"]
-
-EXPOSE 3000
+CMD ["pnpm", "start"]
