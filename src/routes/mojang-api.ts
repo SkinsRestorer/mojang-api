@@ -1,6 +1,6 @@
 import {httpClient} from '../utils/http-client';
 import {invalidMinecraftUsername} from '../utils/validation-utils';
-import {tryParseUUID, convertToNoDashes} from '../utils/uuid-utils';
+import {convertToNoDashes, tryParseUUID} from '../utils/uuid-utils';
 import {
   ErrorType,
   MOJANG_API,
@@ -29,7 +29,15 @@ mojangApiRouter.openapi(
     path: '/uuid/:name',
     request: {
       params: z.object({
-        name: z.string().describe('Minecraft username to convert to UUID')
+        name: z.string()
+          .describe('Minecraft username to convert to UUID')
+          .openapi({
+            param: {
+              name: 'name',
+              in: 'path',
+            },
+            example: 'Pistonmaster',
+          }),
       }),
     },
     tags: ['mojang'],
@@ -147,7 +155,15 @@ mojangApiRouter.openapi(
     path: '/skin/:uuid',
     request: {
       params: z.object({
-        uuid: z.string().describe('Minecraft UUID to get skin data for')
+        uuid: z.string()
+          .describe('Minecraft UUID to get skin data for')
+          .openapi({
+            param: {
+              name: 'uuid',
+              in: 'path',
+            },
+            example: 'b1ae0778-4817-436c-96a3-a72c67cda060',
+          }),
       }),
     },
     tags: ['mojang'],

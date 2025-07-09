@@ -54,7 +54,8 @@ app.doc(
       {name: "health", description: "Health check endpoint"},
     ],
     servers: [
-      {url: 'http://localhost:3000', description: 'Local Server'},
+      {url: `https://eclipse.skinsrestorer.net`, description: 'Main Server'},
+      {url: `http://localhost:${PORT}`, description: 'Local Server'},
     ],
   }
 )
