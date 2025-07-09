@@ -39,7 +39,7 @@ export interface MojangProperty {
 // Constants for the Mojang API
 export const MOJANG_API = {
   // API endpoints
-  UUID_URL: 'https://api.minecraftservices.com/minecraft/profile/lookup/name/%s',
+  UUID_URL: 'https://api.mojang.com/users/profiles/minecraft/%s',
   PROFILE_URL: 'https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false',
 
   // Cache duration in minutes
