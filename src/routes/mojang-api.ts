@@ -94,21 +94,16 @@ mojangApiRouter.openapi(
       // Check cache first
       const cachedData = await cacheManager.getNameToUUID(name);
       if (cachedData) {
-        // Set cache headers
-        Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
-          c.header(key, value);
-        });
-
         if (cachedData.value === null) {
           return c.json({
             exists: false,
             uuid: null
-          } as const, 200);
+          } as const, 200, MOJANG_API.CACHE_HEADERS);
         } else {
           return c.json({
             exists: true,
             uuid: cachedData.value
-          } as const, 200);
+          } as const, 200, MOJANG_API.CACHE_HEADERS);
         }
       }
 
@@ -128,21 +123,16 @@ mojangApiRouter.openapi(
       // Cache the result
       cacheManager.putNameToUUID(name, uuid, new Date());
 
-      // Set cache headers
-      Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
-        c.header(key, value);
-      });
-
       if (uuid === null) {
         return c.json({
           exists: false,
           uuid: null
-        } as const, 200);
+        } as const, 200, MOJANG_API.CACHE_HEADERS);
       } else {
         return c.json({
           exists: true,
           uuid
-        } as const, 200);
+        } as const, 200, MOJANG_API.CACHE_HEADERS);
       }
     } catch (error: unknown) {
       console.error(`Error fetching UUID for name ${name}:`, error);
@@ -240,21 +230,16 @@ mojangApiRouter.openapi(
       // Check cache first
       const cachedData = await cacheManager.getUUIDToSkin(uuidParsed);
       if (cachedData) {
-        // Set cache headers
-        Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
-          c.header(key, value);
-        });
-
         if (cachedData.value === null) {
           return c.json({
             exists: false,
             skinProperty: null
-          } as const, 200);
+          } as const, 200, MOJANG_API.CACHE_HEADERS);
         } else {
           return c.json({
             exists: true,
             skinProperty: cachedData.value
-          } as const, 200);
+          } as const, 200, MOJANG_API.CACHE_HEADERS);
         }
       }
 
@@ -266,12 +251,7 @@ mojangApiRouter.openapi(
       if (response.status === 204) {
         cacheManager.putUUIDToSkin(uuidParsed, null, new Date());
 
-        // Set cache headers
-        Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
-          c.header(key, value);
-        });
-
-        return c.json({exists: false, skinProperty: null} as const, 200);
+        return c.json({exists: false, skinProperty: null} as const, 200, MOJANG_API.CACHE_HEADERS);
       }
 
       // Handle other non-success responses
@@ -290,16 +270,11 @@ mojangApiRouter.openapi(
         signature: property.signature
       } : null, new Date());
 
-      // Set cache headers
-      Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
-        c.header(key, value);
-      });
-
       if (property === null) {
         return c.json({
           exists: false,
           skinProperty: null
-        } as const, 200);
+        } as const, 200, MOJANG_API.CACHE_HEADERS);
       } else {
         // Return the skin property if it exists
         return c.json({
@@ -308,7 +283,7 @@ mojangApiRouter.openapi(
             value: property.value,
             signature: property.signature
           }
-        } as const, 200);
+        } as const, 200, MOJANG_API.CACHE_HEADERS);
       }
     } catch (error: unknown) {
       console.error(`Error fetching skin for UUID ${uuidParsed}:`, error);
