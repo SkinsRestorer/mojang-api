@@ -51,7 +51,7 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              error: z.nativeEnum(ErrorType).describe('Error type')
+              error: z.literal(ErrorType.INVALID_NAME).describe('Error type')
             })
           },
         },
@@ -61,7 +61,7 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              error: z.nativeEnum(ErrorType).describe('Error type')
+              error: z.literal(ErrorType.INTERNAL_ERROR).describe('Error type')
             })
           },
         },
@@ -71,7 +71,7 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              error: z.nativeEnum(ErrorType).describe('Error type')
+              error: z.literal(ErrorType.INTERNAL_TIMEOUT).describe('Error type')
             })
           },
         },
@@ -83,7 +83,7 @@ mojangApiRouter.openapi(
 
     // Validate username
     if (invalidMinecraftUsername(name)) {
-      return c.json({error: ErrorType.INVALID_NAME}, 400);
+      return c.json({error: ErrorType.INVALID_NAME} as const, 400);
     }
 
     try {
@@ -108,7 +108,7 @@ mojangApiRouter.openapi(
       const isNotFound = response.status === 404;
       const isSuccess = response.status >= 200 && response.status < 300;
       if (!isNotFound && !isSuccess) {
-        return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
+        return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
       }
 
       const responseData = response.data as MojangUUIDResponse;
@@ -131,10 +131,10 @@ mojangApiRouter.openapi(
 
       // Check if it's a timeout error
       if (error instanceof Error && error.name === 'AbortError') {
-        return c.json({error: ErrorType.INTERNAL_TIMEOUT}, 503);
+        return c.json({error: ErrorType.INTERNAL_TIMEOUT} as const, 503);
       }
 
-      return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
+      return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
     }
   });
 
@@ -172,7 +172,7 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              error: z.nativeEnum(ErrorType).describe('Error type')
+              error: z.literal(ErrorType.INVALID_UUID).describe('Error type')
             })
           },
         },
@@ -182,7 +182,7 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              error: z.nativeEnum(ErrorType).describe('Error type')
+              error: z.literal(ErrorType.INTERNAL_ERROR).describe('Error type')
             })
           },
         },
@@ -192,7 +192,7 @@ mojangApiRouter.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              error: z.nativeEnum(ErrorType).describe('Error type')
+              error: z.literal(ErrorType.INTERNAL_TIMEOUT).describe('Error type')
             })
           },
         },
@@ -204,7 +204,7 @@ mojangApiRouter.openapi(
     const uuidParsed = tryParseUUID(uuid);
 
     if (!uuidParsed) {
-      return c.json({error: ErrorType.INVALID_UUID}, 400);
+      return c.json({error: ErrorType.INVALID_UUID} as const, 400);
     }
 
     try {
@@ -240,7 +240,7 @@ mojangApiRouter.openapi(
 
       // Handle other non-success responses
       if (response.status < 200 || response.status >= 300) {
-        return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
+        return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
       }
 
       const responseData = await response.data as MojangProfileResponse;
@@ -271,9 +271,9 @@ mojangApiRouter.openapi(
 
       // Check if it's a timeout error
       if (error instanceof Error && error.name === 'AbortError') {
-        return c.json({error: ErrorType.INTERNAL_TIMEOUT}, 503);
+        return c.json({error: ErrorType.INTERNAL_TIMEOUT} as const, 503);
       }
 
-      return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
+      return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
     }
   });
