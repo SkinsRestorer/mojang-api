@@ -12,47 +12,12 @@ import {
 } from '../utils/types';
 import {createCacheManager} from '../cache-manager';
 
-// Rate limiting settings
-const RATE_LIMIT = 1000; // Requests per minute
-const rateLimit = {
-  current: 0,
-  lastReset: Date.now(),
-  timeWindow: 60 * 1000 // 1 minute in milliseconds
-};
-
-/**
- * Middleware to implement rate limiting
- */
-const rateLimiter = (context: any) => {
-  const now = Date.now();
-
-  // Reset counter if we're in a new time window
-  if (now - rateLimit.lastReset > rateLimit.timeWindow) {
-    rateLimit.current = 0;
-    rateLimit.lastReset = now;
-  }
-
-  // Increment counter
-  rateLimit.current++;
-
-  // Check if we're over the limit
-  if (rateLimit.current > RATE_LIMIT) {
-    context.set.status = 429;
-    return {
-      error: 'Too Many Requests',
-      message: 'Rate limit exceeded. Please try again later.'
-    };
-  }
-};
-
 /**
  * Router for Mojang API endpoints
  */
 export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
   // Setup context with cache manager
   .decorate("cacheManager", createCacheManager())
-  .use(app => app.onBeforeHandle(rateLimiter))
-
   /**
    * Convert Minecraft username to UUID
    */
@@ -70,7 +35,7 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
       const cachedData = await cacheManager.getNameToUUID(name);
       if (cachedData) {
         set.headers = MOJANG_API.CACHE_HEADERS;
-        return { exists: cachedData.value !== null, uuid: cachedData.value } as UUIDResponse;
+        return { exists: cachedData.value !== null, uuid: cachedData.value } satisfies UUIDResponse;
       }
 
       // If not in cache, call Mojang API
@@ -91,7 +56,7 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
 
       // Return response
       set.headers = MOJANG_API.CACHE_HEADERS;
-      return { exists: uuid !== null, uuid } as UUIDResponse;
+      return { exists: uuid !== null, uuid } satisfies UUIDResponse;
     } catch (error: unknown) {
       console.error(`Error fetching UUID for name ${name}:`, error);
 
@@ -149,7 +114,7 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
         return {
           exists: cachedData.value !== null,
           skinProperty: cachedData.value
-        } as ProfileResponse;
+        } satisfies ProfileResponse;
       }
 
       // If not in cache, call Mojang API
@@ -188,7 +153,7 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
           value: property.value,
           signature: property.signature
         } : null
-      } as ProfileResponse;
+      } satisfies ProfileResponse;
     } catch (error: unknown) {
       console.error(`Error fetching skin for UUID ${uuid}:`, error);
 

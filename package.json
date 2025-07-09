@@ -7,11 +7,12 @@
     "start": "bun run src/index.ts"
   },
   "dependencies": {
-    "elysia": "latest",
     "@elysiajs/cors": "latest",
     "@elysiajs/swagger": "latest",
-    "node-fetch": "latest",
-    "lru-cache": "latest"
+    "elysia": "latest",
+    "elysia-rate-limit": "^4.4.0",
+    "lru-cache": "latest",
+    "node-fetch": "latest"
   },
   "devDependencies": {
     "bun-types": "latest"
