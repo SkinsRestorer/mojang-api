@@ -1,7 +1,7 @@
-import { Elysia, t } from 'elysia';
-import { httpClient } from '../utils/http-client';
-import { invalidMinecraftUsername } from '../utils/validation-utils';
-import { tryParseUUID, convertToNoDashes } from '../utils/uuid-utils';
+import {Hono} from 'hono';
+import {httpClient} from '../utils/http-client';
+import {invalidMinecraftUsername} from '../utils/validation-utils';
+import {tryParseUUID, convertToNoDashes} from '../utils/uuid-utils';
 import {
   ErrorType,
   MOJANG_API,
@@ -11,31 +11,62 @@ import {
   UUIDResponse
 } from '../utils/types';
 import {createCacheManager} from '../cache-manager';
+import {describeRoute} from 'hono-openapi';
+import {resolver} from 'hono-openapi/zod';
+import {z} from 'zod';
 
 /**
  * Router for Mojang API endpoints
  */
-export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
-  // Setup context with cache manager
-  .decorate("cacheManager", createCacheManager())
-  /**
-   * Convert Minecraft username to UUID
-   */
-  .get('/uuid/:name', async ({ params, set, cacheManager }) => {
-    const { name } = params;
+export const mojangApiRouter = new Hono();
+
+// Create cache manager
+const cacheManager = createCacheManager();
+
+/**
+ * Convert Minecraft username to UUID
+ */
+mojangApiRouter.get('/uuid/:name',
+  describeRoute({
+    tags: ['mojang'],
+    description: 'Convert a Minecraft username to UUID',
+    responses: {
+      200: {
+        description: 'Successful response',
+        content: {
+          'application/json': {
+            schema: resolver(
+              z.object({
+                exists: z.boolean(),
+                uuid: z.string().nullable()
+              })
+            )
+          },
+        },
+      },
+    },
+  }),
+  async (c) => {
+    const name = c.req.param('name');
 
     // Validate username
     if (invalidMinecraftUsername(name)) {
-      set.status = 400;
-      return { error: ErrorType.INVALID_NAME };
+      return c.json({error: ErrorType.INVALID_NAME}, 400);
     }
 
     try {
       // Check cache first
       const cachedData = await cacheManager.getNameToUUID(name);
       if (cachedData) {
-        set.headers = MOJANG_API.CACHE_HEADERS;
-        return { exists: cachedData.value !== null, uuid: cachedData.value } satisfies UUIDResponse;
+        // Set cache headers
+        Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
+          c.header(key, value);
+        });
+
+        return c.json({
+          exists: cachedData.value !== null,
+          uuid: cachedData.value
+        } satisfies UUIDResponse);
       }
 
       // If not in cache, call Mojang API
@@ -45,8 +76,7 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
       const isNotFound = response.status === 404;
       const isSuccess = response.status >= 200 && response.status < 300;
       if (!isNotFound && !isSuccess) {
-        set.status = 500;
-        return { error: ErrorType.INTERNAL_ERROR };
+        return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
       }
 
       const responseData = response.data as MojangUUIDResponse;
@@ -55,67 +85,74 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
       // Cache the result
       cacheManager.putNameToUUID(name, uuid, new Date());
 
-      // Return response
-      set.headers = MOJANG_API.CACHE_HEADERS;
-      return { exists: uuid !== null, uuid } satisfies UUIDResponse;
+      // Set cache headers
+      Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
+        c.header(key, value);
+      });
+
+      return c.json({
+        exists: uuid !== null,
+        uuid
+      } satisfies UUIDResponse);
     } catch (error: unknown) {
       console.error(`Error fetching UUID for name ${name}:`, error);
 
       // Check if it's a timeout error
       if (error instanceof Error && error.name === 'AbortError') {
-        set.status = 503;
-        return { error: ErrorType.INTERNAL_TIMEOUT };
+        return c.json({error: ErrorType.INTERNAL_TIMEOUT}, 503);
       }
 
-      set.status = 500;
-      return { error: ErrorType.INTERNAL_ERROR };
+      return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
     }
-  }, {
-    params: t.Object({
-      name: t.String()
-    }),
-    detail: {
-      tags: ['mojang'],
-      summary: 'Convert a Minecraft username to UUID',
-      description: 'Returns the UUID for a given Minecraft username',
-      responses: {
-        200: {
-          description: 'UUID found or not found',
-        },
-        400: {
-          description: 'Invalid username format'
-        },
-        500: {
-          description: 'Internal server error'
-        },
-        503: {
-          description: 'Request timed out'
-        }
-      }
-    }
-  })
+  });
 
-  /**
-   * Get skin data for a Minecraft UUID
-   */
-  .get('/skin/:uuid', async ({ params, set, cacheManager }) => {
-    const uuidParam = params.uuid;
+/**
+ * Get skin data for a Minecraft UUID
+ */
+mojangApiRouter.get('/skin/:uuid',
+  describeRoute({
+    tags: ['mojang'],
+    description: 'Get skin data for a Minecraft UUID',
+    responses: {
+      200: {
+        description: 'Successful response',
+        content: {
+          'application/json': {
+            schema: resolver(
+              z.object({
+                exists: z.boolean(),
+                skinProperty: z.object({
+                  value: z.string(),
+                  signature: z.string()
+                }).nullable()
+              })
+            )
+          },
+        },
+      },
+    },
+  }),
+  async (c) => {
+    const uuidParam = c.req.param('uuid');
     const uuid = tryParseUUID(uuidParam);
 
     if (!uuid) {
-      set.status = 400;
-      return { error: ErrorType.INVALID_UUID };
+      return c.json({error: ErrorType.INVALID_UUID}, 400);
     }
 
     try {
       // Check cache first
       const cachedData = await cacheManager.getUUIDToSkin(uuid);
       if (cachedData) {
-        set.headers = MOJANG_API.CACHE_HEADERS;
-        return {
+        // Set cache headers
+        Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
+          c.header(key, value);
+        });
+
+        return c.json({
           exists: cachedData.value !== null,
           skinProperty: cachedData.value
-        } satisfies ProfileResponse;
+        } satisfies ProfileResponse);
       }
 
       // If not in cache, call Mojang API
@@ -125,14 +162,18 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
       // Handle 204 No Content (profile doesn't exist)
       if (response.status === 204) {
         cacheManager.putUUIDToSkin(uuid, null, new Date());
-        set.headers = MOJANG_API.CACHE_HEADERS;
-        return { exists: false, skinProperty: null };
+
+        // Set cache headers
+        Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
+          c.header(key, value);
+        });
+
+        return c.json({exists: false, skinProperty: null});
       }
 
       // Handle other non-success responses
       if (response.status < 200 || response.status >= 300) {
-        set.status = 500;
-        return { error: ErrorType.INTERNAL_ERROR };
+        return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
       }
 
       const responseData = await response.data as MojangProfileResponse;
@@ -146,48 +187,26 @@ export const mojangApiRouter = new Elysia({ prefix: '/mojang' })
         signature: property.signature
       } : null, new Date());
 
-      // Return response
-      set.headers = MOJANG_API.CACHE_HEADERS;
-      return {
+      // Set cache headers
+      Object.entries(MOJANG_API.CACHE_HEADERS).forEach(([key, value]) => {
+        c.header(key, value);
+      });
+
+      return c.json({
         exists: property !== null,
         skinProperty: property ? {
           value: property.value,
           signature: property.signature
         } : null
-      } satisfies ProfileResponse;
+      } satisfies ProfileResponse);
     } catch (error: unknown) {
       console.error(`Error fetching skin for UUID ${uuid}:`, error);
 
       // Check if it's a timeout error
       if (error instanceof Error && error.name === 'AbortError') {
-        set.status = 503;
-        return { error: ErrorType.INTERNAL_TIMEOUT };
+        return c.json({error: ErrorType.INTERNAL_TIMEOUT}, 503);
       }
 
-      set.status = 500;
-      return { error: ErrorType.INTERNAL_ERROR };
-    }
-  }, {
-    params: t.Object({
-      uuid: t.String()
-    }),
-    detail: {
-      tags: ['mojang'],
-      summary: 'Get skin data for a Minecraft UUID',
-      description: 'Returns skin property data for a given Minecraft UUID',
-      responses: {
-        200: {
-          description: 'Skin data found or not found',
-        },
-        400: {
-          description: 'Invalid UUID format'
-        },
-        500: {
-          description: 'Internal server error'
-        },
-        503: {
-          description: 'Request timed out'
-        }
-      }
+      return c.json({error: ErrorType.INTERNAL_ERROR}, 500);
     }
   });

@@ -1,11 +1,11 @@
-const IP_BASE = process.env.IP_BASE ?? "0.0.0.0";
-const IP_RANGE = parseInt(process.env.IP_RANGE ?? "0");
-
-if (!IP_BASE || isNaN(IP_RANGE)) {
-  throw new Error("IP_BASE and IP_RANGE environment variables must be set.");
-}
-
 export function getRandomLocalAddressHost(): string {
+  const IP_BASE = process.env.IP_BASE ?? "0.0.0.0";
+  const IP_RANGE = parseInt(process.env.IP_RANGE ?? "0");
+
+  if (!IP_BASE || isNaN(IP_RANGE)) {
+    throw new Error("IP_BASE and IP_RANGE environment variables must be set.");
+  }
+
   try {
     const base = parseIpToBytes(IP_BASE);
     const bits = base.length * 8;
