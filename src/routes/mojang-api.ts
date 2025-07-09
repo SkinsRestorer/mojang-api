@@ -46,6 +46,36 @@ mojangApiRouter.openapi(
           },
         },
       },
+      400: {
+        description: 'Invalid username format',
+        content: {
+          'application/json': {
+            schema: z.object({
+              error: z.nativeEnum(ErrorType).describe('Error type')
+            })
+          },
+        },
+      },
+      500: {
+        description: 'Internal server error',
+        content: {
+          'application/json': {
+            schema: z.object({
+              error: z.nativeEnum(ErrorType).describe('Error type')
+            })
+          },
+        },
+      },
+      503: {
+        description: 'Service unavailable due to timeout',
+        content: {
+          'application/json': {
+            schema: z.object({
+              error: z.nativeEnum(ErrorType).describe('Error type')
+            })
+          },
+        },
+      },
     },
   }),
   async (c) => {
@@ -68,7 +98,7 @@ mojangApiRouter.openapi(
         return c.json({
           exists: cachedData.value !== null,
           uuid: cachedData.value
-        } satisfies UUIDResponse);
+        } satisfies UUIDResponse, 200);
       }
 
       // If not in cache, call Mojang API
@@ -95,7 +125,7 @@ mojangApiRouter.openapi(
       return c.json({
         exists: uuid !== null,
         uuid
-      } satisfies UUIDResponse);
+      } satisfies UUIDResponse, 200);
     } catch (error: unknown) {
       console.error(`Error fetching UUID for name ${name}:`, error);
 
@@ -137,6 +167,36 @@ mojangApiRouter.openapi(
           },
         },
       },
+      400: {
+        description: 'Invalid UUID format',
+        content: {
+          'application/json': {
+            schema: z.object({
+              error: z.nativeEnum(ErrorType).describe('Error type')
+            })
+          },
+        },
+      },
+      500: {
+        description: 'Internal server error',
+        content: {
+          'application/json': {
+            schema: z.object({
+              error: z.nativeEnum(ErrorType).describe('Error type')
+            })
+          },
+        },
+      },
+      503: {
+        description: 'Service unavailable due to timeout',
+        content: {
+          'application/json': {
+            schema: z.object({
+              error: z.nativeEnum(ErrorType).describe('Error type')
+            })
+          },
+        },
+      }
     },
   }),
   async (c) => {
@@ -159,7 +219,7 @@ mojangApiRouter.openapi(
         return c.json({
           exists: cachedData.value !== null,
           skinProperty: cachedData.value
-        } satisfies ProfileResponse);
+        } satisfies ProfileResponse, 200);
       }
 
       // If not in cache, call Mojang API
@@ -175,7 +235,7 @@ mojangApiRouter.openapi(
           c.header(key, value);
         });
 
-        return c.json({exists: false, skinProperty: null});
+        return c.json({exists: false, skinProperty: null}, 200);
       }
 
       // Handle other non-success responses
@@ -205,7 +265,7 @@ mojangApiRouter.openapi(
           value: property.value,
           signature: property.signature
         } : null
-      } satisfies ProfileResponse);
+      } satisfies ProfileResponse, 200);
     } catch (error: unknown) {
       console.error(`Error fetching skin for UUID ${uuidParsed}:`, error);
 
