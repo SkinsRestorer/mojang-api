@@ -10,7 +10,7 @@
   "dependencies": {
     "@hono/node-server": "^1.8.2",
     "@hono/swagger-ui": "^0.2.1",
-    "@hono/zod-openapi": "^0.19.9",
+    "@hono/zod-openapi": "^1.0.0",
     "axios": "^1.10.0",
     "dotenv-flow": "^4.1.0",
     "hono": "^4.8.4",
