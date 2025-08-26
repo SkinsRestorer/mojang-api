@@ -3,6 +3,7 @@ import axios from "axios";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as process from "node:process";
+import * as zlib from "node:zlib";
 
 /**
  * Maximum request timeout in milliseconds
@@ -12,7 +13,11 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const instance = axios.create();
 
 instance.interceptors.request.use(config => {
-  config.headers['Accept-Encoding'] = 'gzip, deflate, br'
+  if (config.data) {
+    config.data = zlib.gzipSync(JSON.stringify(config.data));
+    config.headers['Content-Encoding'] = 'gzip';
+    config.headers['Content-Type'] = 'application/json';
+  }
   return config;
 });
 
