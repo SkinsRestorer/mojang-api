@@ -38,5 +38,33 @@ export const httpClient = {
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
+  },
+
+  /**
+   * Makes a POST request to the specified URL
+   * @param url The URL to request
+   * @param data The data to send in the request body
+   * @returns A promise that resolves to the response object
+   */
+  async post(url: string, data: any) {
+    // Get a random local address for the outgoing connection
+    const localAddress = getRandomLocalAddressHost();
+
+    const httpAgent = new http.Agent({localAddress});
+    const httpsAgent = new https.Agent({localAddress});
+
+    return await axios.post(url, data, {
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en',
+        'Content-Type': 'application/json',
+        'User-Agent': 'SRMojangAPI'
+      },
+      proxy: process.env.HTTP_PROXY ? JSON.parse(process.env.HTTP_PROXY) : false,
+      // httpAgent,
+      // httpsAgent,
+      timeout: REQUEST_TIMEOUT_MS,
+      validateStatus: () => true, // Accept all status codes; never throw
+    });
   }
 };

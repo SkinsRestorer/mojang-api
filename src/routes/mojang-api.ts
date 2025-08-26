@@ -1,9 +1,10 @@
 import {httpClient} from '../utils/http-client';
 import {invalidMinecraftUsername} from '../utils/validation-utils';
 import {convertToNoDashes, tryParseUUID} from '../utils/uuid-utils';
-import {ErrorType, MOJANG_API, MojangProfileResponse, MojangUUIDResponse,} from '../utils/types';
+import {ErrorType, MOJANG_API, MojangProfileResponse} from '../utils/types';
 import {createCacheManager} from '../cache-manager';
 import {createRoute, OpenAPIHono, z} from "@hono/zod-openapi";
+import {batchProcessor} from '../utils/batch-processor';
 import * as console from "node:console";
 
 /**
@@ -92,55 +93,15 @@ mojangApiRouter.openapi(
     }
 
     try {
-      // Check cache first
-      const cachedData = await cacheManager.getNameToUUID(name);
-      if (cachedData) {
-        if (cachedData.value === null) {
-          return c.json({
-            exists: false,
-            uuid: null
-          } as const, 200, MOJANG_API.CACHE_HEADERS);
-        } else {
-          return c.json({
-            exists: true,
-            uuid: cachedData.value
-          } as const, 200, MOJANG_API.CACHE_HEADERS);
-        }
-      }
+      // Use the batch processor to get the UUID
+      const result = await batchProcessor.addRequest(name);
 
-      // If not in cache, call Mojang API
-      const mojangUrl = MOJANG_API.UUID_URL.replace('%s', name);
-      const response = await httpClient.get(mojangUrl);
-
-      const isNotFound = response.status === 404;
-      const isSuccess = response.status >= 200 && response.status < 300;
-      if (!isNotFound && !isSuccess) {
-        console.error(`Error fetching UUID for name ${name}:`, response.status, response.statusText);
-        return c.json({error: ErrorType.INTERNAL_ERROR} as const, 500);
-      }
-
-      const responseData = response.data as MojangUUIDResponse;
-      const uuid = isNotFound || !responseData.id ? null : tryParseUUID(responseData.id);
-
-      // Cache the result
-      cacheManager.putNameToUUID(name, uuid, new Date());
-
-      if (uuid === null) {
-        return c.json({
-          exists: false,
-          uuid: null
-        } as const, 200, MOJANG_API.CACHE_HEADERS);
-      } else {
-        return c.json({
-          exists: true,
-          uuid
-        } as const, 200, MOJANG_API.CACHE_HEADERS);
-      }
+      return c.json(result, 200, MOJANG_API.CACHE_HEADERS);
     } catch (error: unknown) {
       console.error(`Error fetching UUID for name ${name}:`, error);
 
       // Check if it's a timeout error
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof Error && error.message === 'Request timeout') {
         return c.json({error: ErrorType.INTERNAL_TIMEOUT} as const, 503);
       }
 

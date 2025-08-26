@@ -8,6 +8,7 @@ import {healthRouter} from "./routes/health";
 import {rateLimiter} from "hono-rate-limiter";
 import {logger} from "hono/logger";
 import {OpenAPIHono} from "@hono/zod-openapi";
+import {batchProcessor} from "./utils/batch-processor";
 
 // Get server port from environment variables or use default
 const PORT = process.env.SERVER_PORT ? parseInt(process.env.SERVER_PORT) : 3000;
@@ -91,5 +92,12 @@ serve({
 // Handle graceful shutdown
 process.on("SIGINT", () => {
   console.log("Server shutting down...");
+  batchProcessor.shutdown();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  console.log("Server shutting down...");
+  batchProcessor.shutdown();
   process.exit(0);
 });
