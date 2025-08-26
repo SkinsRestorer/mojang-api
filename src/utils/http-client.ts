@@ -3,23 +3,11 @@ import axios from "axios";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as process from "node:process";
-import * as zlib from "node:zlib";
 
 /**
  * Maximum request timeout in milliseconds
  */
 const REQUEST_TIMEOUT_MS = 15_000;
-
-const instance = axios.create();
-
-instance.interceptors.request.use(config => {
-  if (config.data) {
-    config.data = zlib.gzipSync(JSON.stringify(config.data));
-    config.headers['Content-Encoding'] = 'gzip';
-    config.headers['Content-Type'] = 'application/json';
-  }
-  return config;
-});
 
 /**
  * HTTP client for making requests to external APIs
@@ -37,7 +25,7 @@ export const httpClient = {
     const httpAgent = new http.Agent({localAddress});
     const httpsAgent = new https.Agent({localAddress});
 
-    return await instance.get(url, {
+    return await axios.get(url, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
@@ -65,7 +53,7 @@ export const httpClient = {
     const httpAgent = new http.Agent({localAddress});
     const httpsAgent = new https.Agent({localAddress});
 
-    return await instance.post(url, data, {
+    return await axios.post(url, data, {
       headers: {
         'Accept': 'application/json',
         'Accept-Language': 'en-US,en',
