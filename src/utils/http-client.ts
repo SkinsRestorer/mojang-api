@@ -33,8 +33,8 @@ export const httpClient = {
         'User-Agent': 'SRMojangAPI'
       },
       proxy: process.env.HTTP_PROXY ? JSON.parse(process.env.HTTP_PROXY) : false,
-      // httpAgent,
-      // httpsAgent,
+      httpAgent,
+      httpsAgent,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
