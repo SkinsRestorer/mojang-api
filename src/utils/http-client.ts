@@ -2,7 +2,6 @@ import {getRandomLocalAddressHost} from "./local-address-provider";
 import axios from "axios";
 import * as http from "node:http";
 import * as https from "node:https";
-import * as process from "node:process";
 
 /**
  * Maximum request timeout in milliseconds
@@ -32,7 +31,6 @@ export const httpClient = {
         'Accept-Language': 'en-US,en',
         'User-Agent': 'SRMojangAPI'
       },
-      proxy: process.env.HTTP_PROXY ? JSON.parse(process.env.HTTP_PROXY) : false,
       httpAgent,
       httpsAgent,
       timeout: REQUEST_TIMEOUT_MS,
