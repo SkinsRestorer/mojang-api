@@ -18,5 +18,8 @@
     "hono-rate-limiter": "^0.4.2",
     "lru-cache": "latest",
     "tsx": "^4.20.3"
+  },
+  "devDependencies": {
+    "biome": "^0.3.3"
   }
 }
