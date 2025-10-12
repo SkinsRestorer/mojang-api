@@ -9,7 +9,9 @@
  */
 export function tryParseUUID(str: string): string | null {
   // Check if it's already a valid dashed UUID format
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)) {
+  if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
+  ) {
     return str.toLowerCase();
   }
 
@@ -17,7 +19,7 @@ export function tryParseUUID(str: string): string | null {
   if (/^[0-9a-f]{32}$/i.test(str)) {
     try {
       return convertToDashed(str).toLowerCase();
-    } catch (e) {
+    } catch (_e) {
       return null;
     }
   }
@@ -32,7 +34,7 @@ export function tryParseUUID(str: string): string | null {
  */
 export function convertToDashed(noDashes: string): string {
   if (!/^[0-9a-f]{32}$/i.test(noDashes)) {
-    throw new Error('Invalid UUID format');
+    throw new Error("Invalid UUID format");
   }
 
   return [
@@ -40,8 +42,8 @@ export function convertToDashed(noDashes: string): string {
     noDashes.substring(8, 12),
     noDashes.substring(12, 16),
     noDashes.substring(16, 20),
-    noDashes.substring(20)
-  ].join('-');
+    noDashes.substring(20),
+  ].join("-");
 }
 
 /**
@@ -50,5 +52,5 @@ export function convertToDashed(noDashes: string): string {
  * @returns UUID string without dashes
  */
 export function convertToNoDashes(uuid: string): string {
-  return uuid.replace(/-/g, '');
+  return uuid.replace(/-/g, "");
 }

@@ -1,7 +1,7 @@
-import {getRandomLocalAddressHost} from "./local-address-provider";
-import axios from "axios";
 import * as http from "node:http";
 import * as https from "node:https";
+import axios from "axios";
+import { getRandomLocalAddressHost } from "./local-address-provider";
 
 /**
  * Maximum request timeout in milliseconds
@@ -21,15 +21,15 @@ export const httpClient = {
     // Get a random local address for the outgoing connection
     const localAddress = getRandomLocalAddressHost();
 
-    const httpAgent = new http.Agent({localAddress});
-    const httpsAgent = new https.Agent({localAddress});
+    const httpAgent = new http.Agent({ localAddress });
+    const httpsAgent = new https.Agent({ localAddress });
 
     return await axios.get(url, {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en',
-        'User-Agent': 'SRMojangAPI'
+        Accept: "application/json",
+        "Accept-Language": "en-US,en",
+        "User-Agent": "SRMojangAPI",
       },
       httpAgent,
       httpsAgent,
@@ -48,21 +48,23 @@ export const httpClient = {
     // Get a random local address for the outgoing connection
     const localAddress = getRandomLocalAddressHost();
 
-    const httpAgent = new http.Agent({localAddress});
-    const httpsAgent = new https.Agent({localAddress});
+    const _httpAgent = new http.Agent({ localAddress });
+    const _httpsAgent = new https.Agent({ localAddress });
 
     return await axios.post(url, data, {
       headers: {
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en',
-        'Content-Type': 'application/json',
-        'User-Agent': 'SRMojangAPI'
+        Accept: "application/json",
+        "Accept-Language": "en-US,en",
+        "Content-Type": "application/json",
+        "User-Agent": "SRMojangAPI",
       },
-      proxy: process.env.HTTP_PROXY ? JSON.parse(process.env.HTTP_PROXY) : false,
+      proxy: process.env.HTTP_PROXY
+        ? JSON.parse(process.env.HTTP_PROXY)
+        : false,
       // httpAgent,
       // httpsAgent,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
-  }
+  },
 };

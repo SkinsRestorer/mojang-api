@@ -7,10 +7,10 @@ export interface ErrorResponse {
 }
 
 export enum ErrorType {
-  INVALID_NAME = 'INVALID_NAME',
-  INVALID_UUID = 'INVALID_UUID',
-  INTERNAL_TIMEOUT = 'INTERNAL_TIMEOUT',
-  INTERNAL_ERROR = 'INTERNAL_ERROR'
+  INVALID_NAME = "INVALID_NAME",
+  INVALID_UUID = "INVALID_UUID",
+  INTERNAL_TIMEOUT = "INTERNAL_TIMEOUT",
+  INTERNAL_ERROR = "INTERNAL_ERROR",
 }
 
 export interface SkinProperty {
@@ -46,8 +46,12 @@ export interface MojangProperty {
 // Constants for the Mojang API
 export const MOJANG_API = {
   // API endpoints
-  BATCH_UUID_URLS: ['https://api.mojang.com/profiles/minecraft', 'https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname'],
-  PROFILE_URL: 'https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false',
+  BATCH_UUID_URLS: [
+    "https://api.mojang.com/profiles/minecraft",
+    "https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname",
+  ],
+  PROFILE_URL:
+    "https://sessionserver.mojang.com/session/minecraft/profile/%s?unsigned=false",
 
   // Cache duration in minutes
   CACHE_DURATION: 15,
@@ -58,7 +62,7 @@ export const MOJANG_API = {
 
   // Response headers for caching
   CACHE_HEADERS: {
-    'Cache-Control': `public, max-age=${15 * 60}`,
-    'Content-Type': 'application/json'
-  }
+    "Cache-Control": `public, max-age=${15 * 60}`,
+    "Content-Type": "application/json",
+  },
 };
