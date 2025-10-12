@@ -6,7 +6,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx --watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "fix": "biome check --write --unsafe",
+    "check": "biome check"
   },
   "dependencies": {
     "@hono/node-server": "^1.8.2",
@@ -20,6 +22,6 @@
     "tsx": "^4.20.3"
   },
   "devDependencies": {
-    "biome": "^0.3.3"
+    "@biomejs/biome": "2.2.5"
   }
 }
