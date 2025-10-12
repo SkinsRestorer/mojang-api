@@ -1,26 +1,39 @@
-name: Java CI
+name: 'Build and Test'
 
-on: [ push, pull_request ]
-
-permissions:
-  contents: write
+on:
+  - push
+  - pull_request
 
 jobs:
-  build:
-    # Only run on PRs if the source branch is on someone else's repo
-    if: "${{ github.event_name != 'pull_request' || github.repository != github.event.pull_request.head.repo.full_name }}"
+  test:
+    name: Build and Test
 
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - name: 'Checkout repository'
+        uses: actions/checkout@v5
         with:
-          java-version: '21'
-          distribution: 'temurin'
-      - name: Build with Gradle
-        run: ./gradlew build test --stacktrace --scan
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+        with:
+          version: latest
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run typecheck
+        run: |
+          pnpm typecheck
+
+      - name: Run check
+        run: |
+          pnpm check
