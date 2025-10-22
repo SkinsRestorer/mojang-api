@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.8.2",
-    "@hono/swagger-ui": "^0.2.1",
+    "@hono/swagger-ui": "^0.5.0",
     "@hono/zod-openapi": "^0.19.9",
     "axios": "^1.10.0",
     "dotenv-flow": "^4.1.0",
@@ -22,6 +22,6 @@
     "tsx": "^4.20.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.2.5"
+    "@biomejs/biome": "2.2.7"
   }
 }
