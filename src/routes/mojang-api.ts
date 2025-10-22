@@ -1,4 +1,3 @@
-import * as console from "node:console";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { createCacheManager } from "../cache-manager";
 import { batchProcessor } from "../utils/batch-processor";
