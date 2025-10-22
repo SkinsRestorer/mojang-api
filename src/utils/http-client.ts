@@ -44,7 +44,7 @@ export const httpClient = {
    * @param data The data to send in the request body
    * @returns A promise that resolves to the response object
    */
-  async post(url: string, data: any) {
+  async post(url: string, data: unknown) {
     // Get a random local address for the outgoing connection
     const localAddress = getRandomLocalAddressHost();
 

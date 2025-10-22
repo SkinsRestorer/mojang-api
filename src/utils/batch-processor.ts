@@ -1,4 +1,3 @@
-import * as console from "node:console";
 import { createCacheManager } from "../cache-manager";
 import { httpClient } from "./http-client";
 import { MOJANG_API, type MojangBatchUUIDResponse } from "./types";
