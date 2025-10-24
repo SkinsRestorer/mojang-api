@@ -10,13 +10,13 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^1.8.2
-        version: 1.19.5(hono@4.10.2)
+        version: 1.19.5(hono@4.10.3)
       '@hono/swagger-ui':
         specifier: ^0.5.0
-        version: 0.5.2(hono@4.10.2)
+        version: 0.5.2(hono@4.10.3)
       '@hono/zod-openapi':
         specifier: ^1.0.0
-        version: 1.1.4(hono@4.10.2)(zod@3.25.76)
+        version: 1.1.4(hono@4.10.3)(zod@3.25.76)
       axios:
         specifier: ^1.10.0
         version: 1.12.2
@@ -25,10 +25,10 @@ importers:
         version: 4.1.0
       hono:
         specifier: ^4.8.4
-        version: 4.10.2
+        version: 4.10.3
       hono-rate-limiter:
         specifier: ^0.4.2
-        version: 0.4.2(hono@4.10.2)
+        version: 0.4.2(hono@4.10.3)
       lru-cache:
         specifier: latest
         version: 11.2.2
@@ -384,8 +384,8 @@ packages:
     peerDependencies:
       hono: ^4.1.1
 
-  hono@4.10.2:
-    resolution: {integrity: sha512-p6fyzl+mQo6uhESLxbF5WlBOAJMDh36PljwlKtP5V1v09NxlqGru3ShK+4wKhSuhuYf8qxMmrivHOa/M7q0sMg==}
+  hono@4.10.3:
+    resolution: {integrity: sha512-2LOYWUbnhdxdL8MNbNg9XZig6k+cZXm5IjHn2Aviv7honhBMOHb+jxrKIeJRZJRmn+htUCKhaicxwXuUDlchRA==}
     engines: {node: '>=16.9.0'}
 
   lru-cache@11.2.2:
@@ -546,25 +546,25 @@ snapshots:
   '@esbuild/win32-x64@0.25.11':
     optional: true
 
-  '@hono/node-server@1.19.5(hono@4.10.2)':
+  '@hono/node-server@1.19.5(hono@4.10.3)':
     dependencies:
-      hono: 4.10.2
+      hono: 4.10.3
 
-  '@hono/swagger-ui@0.5.2(hono@4.10.2)':
+  '@hono/swagger-ui@0.5.2(hono@4.10.3)':
     dependencies:
-      hono: 4.10.2
+      hono: 4.10.3
 
-  '@hono/zod-openapi@1.1.4(hono@4.10.2)(zod@3.25.76)':
+  '@hono/zod-openapi@1.1.4(hono@4.10.3)(zod@3.25.76)':
     dependencies:
       '@asteasolutions/zod-to-openapi': 8.1.0(zod@3.25.76)
-      '@hono/zod-validator': 0.7.4(hono@4.10.2)(zod@3.25.76)
-      hono: 4.10.2
+      '@hono/zod-validator': 0.7.4(hono@4.10.3)(zod@3.25.76)
+      hono: 4.10.3
       openapi3-ts: 4.5.0
       zod: 3.25.76
 
-  '@hono/zod-validator@0.7.4(hono@4.10.2)(zod@3.25.76)':
+  '@hono/zod-validator@0.7.4(hono@4.10.3)(zod@3.25.76)':
     dependencies:
-      hono: 4.10.2
+      hono: 4.10.3
       zod: 3.25.76
 
   asynckit@0.4.0: {}
@@ -693,11 +693,11 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono-rate-limiter@0.4.2(hono@4.10.2):
+  hono-rate-limiter@0.4.2(hono@4.10.3):
     dependencies:
-      hono: 4.10.2
+      hono: 4.10.3
 
-  hono@4.10.2: {}
+  hono@4.10.3: {}
 
   lru-cache@11.2.2: {}
 
