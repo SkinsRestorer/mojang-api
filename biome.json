@@ -16,9 +16,7 @@
       "!coverage",
       "!out",
       "!.source",
-      "!postcss.config.mjs",
-      "!src/components/ui",
-      "!src/components/data-table"
+      "!postcss.config.mjs"
     ]
   },
   "formatter": {
@@ -27,6 +25,11 @@
     "indentWidth": 2
   },
   "linter": {
+    "includes": [
+      "**",
+      "!src/components/ui",
+      "!src/components/data-table"
+    ],
     "enabled": true,
     "rules": {
       "recommended": true,
