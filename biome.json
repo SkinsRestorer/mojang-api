@@ -25,11 +25,6 @@
     "indentWidth": 2
   },
   "linter": {
-    "includes": [
-      "**",
-      "!src/components/ui",
-      "!src/components/data-table"
-    ],
     "enabled": true,
     "rules": {
       "recommended": true,
