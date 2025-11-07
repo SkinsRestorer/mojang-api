@@ -121,7 +121,7 @@ mojangApiRouter.openapi(
         return c.json({ error: ErrorType.INTERNAL_TIMEOUT } as const, 503);
       }
 
-      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 500);
+      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 503);
     }
   },
 );
@@ -293,7 +293,7 @@ mojangApiRouter.openapi(
         return c.json({ error: ErrorType.INTERNAL_TIMEOUT } as const, 503);
       }
 
-      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 500);
+      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 503);
     }
   },
 );
