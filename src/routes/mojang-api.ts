@@ -18,6 +18,31 @@ export const mojangApiRouter = new OpenAPIHono();
 // Create cache manager
 const cacheManager = createCacheManager();
 
+const uuidResponseSchema = z.discriminatedUnion("exists", [
+  z.object({
+    exists: z.literal(true),
+    uuid: z.string(),
+  }),
+  z.object({
+    exists: z.literal(false),
+    uuid: z.null(),
+  }),
+]);
+
+const skinResponseSchema = z.discriminatedUnion("exists", [
+  z.object({
+    exists: z.literal(true),
+    skinProperty: z.object({
+      value: z.string(),
+      signature: z.string(),
+    }),
+  }),
+  z.object({
+    exists: z.literal(false),
+    skinProperty: z.null(),
+  }),
+]);
+
 /**
  * Convert Minecraft username to UUID
  */
@@ -27,16 +52,7 @@ mojangApiRouter.openapi(
     path: "/uuid/{name}",
     request: {
       params: z.object({
-        name: z
-          .string()
-          .describe("Minecraft username to convert to UUID")
-          .openapi({
-            param: {
-              name: "name",
-              in: "path",
-            },
-            example: "Pistonmaster",
-          }),
+        name: z.string().describe("Minecraft username to convert to UUID"),
       }),
     },
     tags: ["mojang"],
@@ -46,17 +62,7 @@ mojangApiRouter.openapi(
         description: "Successful response",
         content: {
           "application/json": {
-            schema: z
-              .object({
-                exists: z.literal(true),
-                uuid: z.string(),
-              })
-              .or(
-                z.object({
-                  exists: z.literal(false),
-                  uuid: z.null(),
-                }),
-              ),
+            schema: uuidResponseSchema,
           },
         },
       },
@@ -129,16 +135,7 @@ mojangApiRouter.openapi(
     path: "/skin/{uuid}",
     request: {
       params: z.object({
-        uuid: z
-          .string()
-          .describe("Minecraft UUID to get skin data for")
-          .openapi({
-            param: {
-              name: "uuid",
-              in: "path",
-            },
-            example: "b1ae0778-4817-436c-96a3-a72c67cda060",
-          }),
+        uuid: z.string().describe("Minecraft UUID to get skin data for"),
       }),
     },
     tags: ["mojang"],
@@ -148,20 +145,7 @@ mojangApiRouter.openapi(
         description: "Successful response",
         content: {
           "application/json": {
-            schema: z
-              .object({
-                exists: z.literal(true),
-                skinProperty: z.object({
-                  value: z.string(),
-                  signature: z.string(),
-                }),
-              })
-              .or(
-                z.object({
-                  exists: z.literal(false),
-                  skinProperty: z.null(),
-                }),
-              ),
+            schema: skinResponseSchema,
           },
         },
       },
