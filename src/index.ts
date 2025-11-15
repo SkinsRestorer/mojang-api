@@ -6,6 +6,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { rateLimiter } from "hono-rate-limiter";
+import { buildOpenApiDocument } from "./openapi-document";
 import { healthRouter } from "./routes/health";
 import { mojangApiRouter } from "./routes/mojang-api";
 import { batchProcessor } from "./utils/batch-processor";
@@ -44,6 +45,8 @@ app.use(
   }),
 );
 
+const openApiDocument = buildOpenApiDocument(PORT);
+
 // Add Swagger documentation
 app.get(
   "/swagger",
@@ -52,22 +55,7 @@ app.get(
   }),
 );
 
-app.doc("/openapi", {
-  openapi: "3.0.0",
-  info: {
-    title: "Mojang API Proxy",
-    version: "2.0.0",
-    description: "A proxy service for Mojang API endpoints",
-  },
-  tags: [
-    { name: "mojang", description: "Mojang API endpoints" },
-    { name: "health", description: "Health check endpoint" },
-  ],
-  servers: [
-    { url: `https://eclipse.skinsrestorer.net`, description: "Main Server" },
-    { url: `http://localhost:${PORT}`, description: "Local Server" },
-  ],
-});
+app.get("/openapi", (c) => c.json(openApiDocument));
 
 // Add a redirect from root to docs
 app.get("/", (c) => {

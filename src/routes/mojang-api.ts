@@ -18,30 +18,27 @@ export const mojangApiRouter = new OpenAPIHono();
 // Create cache manager
 const cacheManager = createCacheManager();
 
-const uuidResponseSchema = z.discriminatedUnion("exists", [
-  z.object({
-    exists: z.literal(true),
-    uuid: z.string(),
-  }),
-  z.object({
-    exists: z.literal(false),
-    uuid: z.null(),
-  }),
-]);
+const uuidResponseSchema = z.object({
+  exists: z.boolean().describe("Indicates whether the requested player exists"),
+  uuid: z
+    .string()
+    .nullable()
+    .describe("The player's UUID when found, otherwise null"),
+});
 
-const skinResponseSchema = z.discriminatedUnion("exists", [
-  z.object({
-    exists: z.literal(true),
-    skinProperty: z.object({
-      value: z.string(),
-      signature: z.string(),
-    }),
-  }),
-  z.object({
-    exists: z.literal(false),
-    skinProperty: z.null(),
-  }),
-]);
+const skinPropertySchema = z.object({
+  value: z.string().describe("Base64 encoded skin data"),
+  signature: z.string().describe("Skin data signature"),
+});
+
+const skinResponseSchema = z.object({
+  exists: z
+    .boolean()
+    .describe("Indicates whether a skin property exists for the UUID"),
+  skinProperty: skinPropertySchema
+    .nullable()
+    .describe("Skin property payload when available"),
+});
 
 /**
  * Convert Minecraft username to UUID
@@ -121,7 +118,7 @@ mojangApiRouter.openapi(
         return c.json({ error: ErrorType.INTERNAL_TIMEOUT } as const, 503);
       }
 
-      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 503);
+      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 500);
     }
   },
 );
@@ -293,7 +290,7 @@ mojangApiRouter.openapi(
         return c.json({ error: ErrorType.INTERNAL_TIMEOUT } as const, 503);
       }
 
-      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 503);
+      return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 500);
     }
   },
 );
