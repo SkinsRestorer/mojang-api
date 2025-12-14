@@ -17,7 +17,7 @@
     "axios": "^1.10.0",
     "dotenv-flow": "^4.1.0",
     "hono": "^4.8.4",
-    "hono-rate-limiter": "^0.4.2",
+    "hono-rate-limiter": "^0.5.0",
     "lru-cache": "latest",
     "tsx": "^4.20.3"
   },
