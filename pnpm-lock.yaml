@@ -28,7 +28,7 @@ importers:
         version: 4.11.3
       hono-rate-limiter:
         specifier: ^0.5.0
-        version: 0.5.2(hono@4.11.3)(unstorage@1.17.3)
+        version: 0.5.3(hono@4.11.3)(unstorage@1.17.3)
       lru-cache:
         specifier: latest
         version: 11.2.4
@@ -402,8 +402,8 @@ packages:
     resolution: {integrity: sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==}
     engines: {node: '>= 0.4'}
 
-  hono-rate-limiter@0.5.2:
-    resolution: {integrity: sha512-AMgn16vbzpt6Qy+sZJ9h5yuH9iBIybc5ZrUktoY7Xy6OOPIwR2TjmLzwdDPlTPZPKD/C75811rYwK0WPwEzvXw==}
+  hono-rate-limiter@0.5.3:
+    resolution: {integrity: sha512-M0DxbVMpPELEzLi0AJg1XyBHLGJXz7GySjsPoK+gc5YeeBsdGDGe+2RvVuCAv8ydINiwlbxqYMNxUEyYfRji/A==}
     peerDependencies:
       hono: ^4.10.8
       unstorage: ^1.17.3
@@ -856,7 +856,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono-rate-limiter@0.5.2(hono@4.11.3)(unstorage@1.17.3):
+  hono-rate-limiter@0.5.3(hono@4.11.3)(unstorage@1.17.3):
     dependencies:
       hono: 4.11.3
     optionalDependencies:
