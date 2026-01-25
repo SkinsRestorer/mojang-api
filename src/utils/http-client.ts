@@ -1,7 +1,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import axios from "axios";
-import { getRandomLocalAddressHost } from "./local-address-provider";
+import {getRandomLocalAddressHost} from "./local-address-provider";
 
 /**
  * Maximum request timeout in milliseconds
@@ -48,8 +48,8 @@ export const httpClient = {
     // Get a random local address for the outgoing connection
     const localAddress = getRandomLocalAddressHost();
 
-    const _httpAgent = new http.Agent({ localAddress });
-    const _httpsAgent = new https.Agent({ localAddress });
+    const httpAgent = new http.Agent({localAddress});
+    const httpsAgent = new https.Agent({localAddress});
 
     return await axios.post(url, data, {
       headers: {
@@ -61,8 +61,8 @@ export const httpClient = {
       proxy: process.env.HTTP_PROXY
         ? JSON.parse(process.env.HTTP_PROXY)
         : false,
-      // httpAgent,
-      // httpsAgent,
+      httpAgent,
+      httpsAgent,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
