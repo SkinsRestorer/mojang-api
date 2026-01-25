@@ -1,6 +1,6 @@
+import {existsSync, readFileSync} from "node:fs";
 import axios from "axios";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { existsSync, readFileSync } from "node:fs";
+import {HttpsProxyAgent} from "https-proxy-agent";
 
 /**
  * Maximum request timeout in milliseconds
