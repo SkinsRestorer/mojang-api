@@ -1,21 +1,12 @@
-import axios, { type AxiosProxyConfig } from "axios";
-import { existsSync, readFileSync } from "node:fs";
+import axios, {type AxiosProxyConfig} from "axios";
+import {existsSync, readFileSync} from "node:fs";
 
 /**
  * Maximum request timeout in milliseconds
  */
 const REQUEST_TIMEOUT_MS = 15_000;
 
-interface ProxyEntry {
-  host: string;
-  port: number;
-  auth?: {
-    username: string;
-    password: string;
-  };
-}
-
-let proxyList: ProxyEntry[] = [];
+const proxyList: AxiosProxyConfig[] = [];
 
 /**
  * Loads proxy list from file specified in PROXY_LIST_FILE env var.
@@ -36,9 +27,10 @@ function loadProxyList(): void {
   for (const line of lines) {
     const parts = line.trim().split(":");
     if (parts.length >= 2) {
-      const proxy: ProxyEntry = {
+      const proxy: AxiosProxyConfig = {
         host: parts[0],
         port: Number.parseInt(parts[1], 10),
+        protocol: "https"
       };
       if (parts.length >= 4) {
         proxy.auth = {
