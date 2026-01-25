@@ -18,6 +18,7 @@
     "dotenv-flow": "^4.1.0",
     "hono": "^4.8.4",
     "hono-rate-limiter": "^0.5.0",
+    "https-proxy-agent": "^7.0.6",
     "lru-cache": "latest",
     "tsx": "^4.20.3"
   },

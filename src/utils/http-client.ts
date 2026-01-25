@@ -1,12 +1,13 @@
-import axios, {type AxiosProxyConfig} from "axios";
-import {existsSync, readFileSync} from "node:fs";
+import axios from "axios";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { existsSync, readFileSync } from "node:fs";
 
 /**
  * Maximum request timeout in milliseconds
  */
 const REQUEST_TIMEOUT_MS = 15_000;
 
-const proxyList: AxiosProxyConfig[] = [];
+const proxyUrls: string[] = [];
 
 /**
  * Loads proxy list from file specified in PROXY_LIST_FILE env var.
@@ -27,30 +28,28 @@ function loadProxyList(): void {
   for (const line of lines) {
     const parts = line.trim().split(":");
     if (parts.length >= 2) {
-      const proxy: AxiosProxyConfig = {
-        host: parts[0],
-        port: Number.parseInt(parts[1], 10),
-        protocol: "https"
-      };
+      const host = parts[0];
+      const port = parts[1];
       if (parts.length >= 4) {
-        proxy.auth = {
-          username: parts[2],
-          password: parts.slice(3).join(":"),
-        };
+        const username = parts[2];
+        const password = parts.slice(3).join(":");
+        proxyUrls.push(`http://${username}:${password}@${host}:${port}`);
+      } else {
+        proxyUrls.push(`http://${host}:${port}`);
       }
-      proxyList.push(proxy);
     }
   }
 
-  console.log(`Loaded ${proxyList.length} proxies from ${proxyListFile}`);
+  console.log(`Loaded ${proxyUrls.length} proxies from ${proxyListFile}`);
 }
 
 /**
- * Returns a random proxy from the loaded list, or false if no proxies available
+ * Returns an HttpsProxyAgent for a random proxy, or undefined if no proxies available
  */
-function getRandomProxy(): AxiosProxyConfig | false {
-  if (proxyList.length === 0) return false;
-  return proxyList[Math.floor(Math.random() * proxyList.length)];
+function getRandomProxyAgent(): HttpsProxyAgent<string> | undefined {
+  if (proxyUrls.length === 0) return undefined;
+  const url = proxyUrls[Math.floor(Math.random() * proxyUrls.length)];
+  return new HttpsProxyAgent(url);
 }
 
 // Load proxies on module initialization
@@ -73,7 +72,8 @@ export const httpClient = {
         "Accept-Language": "en-US,en",
         "User-Agent": "SRMojangAPI",
       },
-      proxy: getRandomProxy(),
+      httpsAgent: getRandomProxyAgent(),
+      proxy: false,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
@@ -93,7 +93,8 @@ export const httpClient = {
         "Content-Type": "application/json",
         "User-Agent": "SRMojangAPI",
       },
-      proxy: getRandomProxy(),
+      httpsAgent: getRandomProxyAgent(),
+      proxy: false,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
