@@ -11,11 +11,10 @@ services:
         hard: 65536
       nproc: 65536
     healthcheck:
-      test: ["CMD", "curl", "-f", "https://eclipse.skinsrestorer.net/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 10s
       timeout: 30s
       retries: 3
-    network_mode: host
     env_file:
       - .env
     environment:
