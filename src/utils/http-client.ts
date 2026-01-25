@@ -1,7 +1,4 @@
-import * as http from "node:http";
-import * as https from "node:https";
 import axios from "axios";
-import {getRandomLocalAddressHost} from "./local-address-provider";
 
 /**
  * Maximum request timeout in milliseconds
@@ -18,12 +15,6 @@ export const httpClient = {
    * @returns A promise that resolves to the response object
    */
   async get(url: string) {
-    // Get a random local address for the outgoing connection
-    const localAddress = getRandomLocalAddressHost();
-
-    const httpAgent = new http.Agent({ localAddress });
-    const httpsAgent = new https.Agent({ localAddress });
-
     return await axios.get(url, {
       method: "GET",
       headers: {
@@ -31,8 +22,9 @@ export const httpClient = {
         "Accept-Language": "en-US,en",
         "User-Agent": "SRMojangAPI",
       },
-      httpAgent,
-      httpsAgent,
+      proxy: process.env.HTTP_PROXY
+        ? JSON.parse(process.env.HTTP_PROXY)
+        : false,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
@@ -45,12 +37,6 @@ export const httpClient = {
    * @returns A promise that resolves to the response object
    */
   async post(url: string, data: unknown) {
-    // Get a random local address for the outgoing connection
-    const localAddress = getRandomLocalAddressHost();
-
-    const httpAgent = new http.Agent({localAddress});
-    const httpsAgent = new https.Agent({localAddress});
-
     return await axios.post(url, data, {
       headers: {
         Accept: "application/json",
@@ -61,8 +47,6 @@ export const httpClient = {
       proxy: process.env.HTTP_PROXY
         ? JSON.parse(process.env.HTTP_PROXY)
         : false,
-      httpAgent,
-      httpsAgent,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // Accept all status codes; never throw
     });
