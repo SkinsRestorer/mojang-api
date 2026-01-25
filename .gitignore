@@ -42,5 +42,4 @@ package-lock.json
 **/*.bun
 
 .idea
-.gradle
 .env
