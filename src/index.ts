@@ -10,6 +10,10 @@ import { buildOpenApiDocument } from "./openapi-document";
 import { healthRouter } from "./routes/health";
 import { mojangApiRouter } from "./routes/mojang-api";
 import { batchProcessor } from "./utils/batch-processor";
+import {
+  startDiscordReporter,
+  stopDiscordReporter,
+} from "./utils/discord-webhook";
 
 // Get server port from environment variables or use default
 const PORT = process.env.SERVER_PORT
@@ -87,18 +91,21 @@ serve(
     console.log(
       `📚 API Documentation available at http://localhost:${info.port}/swagger`,
     );
+    startDiscordReporter();
   },
 );
 
 // Handle graceful shutdown
 process.on("SIGINT", () => {
   console.log("Server shutting down...");
+  stopDiscordReporter();
   batchProcessor.shutdown();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
   console.log("Server shutting down...");
+  stopDiscordReporter();
   batchProcessor.shutdown();
   process.exit(0);
 });

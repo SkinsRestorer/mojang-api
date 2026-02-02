@@ -1,5 +1,6 @@
 import { createCacheManager } from "../cache-manager";
 import { httpClient } from "./http-client";
+import { metrics } from "./metrics";
 import { MOJANG_API, type MojangBatchUUIDResponse } from "./types";
 import { tryParseUUID } from "./uuid-utils";
 
@@ -47,6 +48,7 @@ export class BatchProcessor {
     // First check cache
     const cachedData = await this.cacheManager.getNameToUUID(name);
     if (cachedData) {
+      metrics.uuidCacheHits++;
       if (cachedData.value !== null) {
         return {
           exists: true,
@@ -61,6 +63,7 @@ export class BatchProcessor {
     }
 
     // If not in cache, add to batch queue
+    metrics.uuidCacheMisses++;
     return new Promise<
       | { exists: true; uuid: string }
       | {
@@ -112,6 +115,8 @@ export class BatchProcessor {
       MOJANG_API.BATCH_SIZE,
     );
     const usernames = requestsToProcess.map((req) => req.name);
+    metrics.batchesProcessed++;
+    metrics.usernamesBatched += usernames.length;
 
     try {
       console.log(
@@ -132,6 +137,7 @@ export class BatchProcessor {
         console.error("Batch request validation error:", errorData);
 
         // Reject all requests with validation error
+        metrics.mojangErrors++;
         requestsToProcess.forEach((req) => {
           req.reject(new Error("Validation error in batch request"));
         });
@@ -146,6 +152,7 @@ export class BatchProcessor {
         );
 
         // Reject all requests with server error
+        metrics.mojangErrors++;
         requestsToProcess.forEach((req) => {
           req.reject(new Error(`Server error: ${response.status}`));
         });

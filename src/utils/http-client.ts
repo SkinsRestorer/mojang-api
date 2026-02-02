@@ -1,6 +1,7 @@
-import {existsSync, readFileSync} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import axios from "axios";
-import {HttpsProxyAgent} from "https-proxy-agent";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { metrics } from "./metrics";
 
 /**
  * Maximum request timeout in milliseconds
@@ -65,18 +66,29 @@ export const httpClient = {
    * @returns A promise that resolves to the response object
    */
   async get(url: string) {
-    return await axios.get(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "Accept-Language": "en-US,en",
-        "User-Agent": "SRMojangAPI",
-      },
-      httpsAgent: getRandomProxyAgent(),
-      proxy: false,
-      timeout: REQUEST_TIMEOUT_MS,
-      validateStatus: () => true, // Accept all status codes; never throw
-    });
+    metrics.mojangRequests++;
+    try {
+      const response = await axios.get(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": "en-US,en",
+          "User-Agent": "SRMojangAPI",
+        },
+        httpsAgent: getRandomProxyAgent(),
+        proxy: false,
+        timeout: REQUEST_TIMEOUT_MS,
+        validateStatus: () => true,
+      });
+      const received = response.headers["content-length"]
+        ? Number.parseInt(response.headers["content-length"] as string, 10)
+        : Buffer.byteLength(JSON.stringify(response.data));
+      metrics.bytesReceivedFromMojang += received;
+      return response;
+    } catch (error) {
+      metrics.mojangErrors++;
+      throw error;
+    }
   },
 
   /**
@@ -86,17 +98,30 @@ export const httpClient = {
    * @returns A promise that resolves to the response object
    */
   async post(url: string, data: unknown) {
-    return await axios.post(url, data, {
-      headers: {
-        Accept: "application/json",
-        "Accept-Language": "en-US,en",
-        "Content-Type": "application/json",
-        "User-Agent": "SRMojangAPI",
-      },
-      httpsAgent: getRandomProxyAgent(),
-      proxy: false,
-      timeout: REQUEST_TIMEOUT_MS,
-      validateStatus: () => true, // Accept all status codes; never throw
-    });
+    metrics.mojangRequests++;
+    const body = JSON.stringify(data);
+    metrics.bytesSentToMojang += Buffer.byteLength(body);
+    try {
+      const response = await axios.post(url, data, {
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": "en-US,en",
+          "Content-Type": "application/json",
+          "User-Agent": "SRMojangAPI",
+        },
+        httpsAgent: getRandomProxyAgent(),
+        proxy: false,
+        timeout: REQUEST_TIMEOUT_MS,
+        validateStatus: () => true,
+      });
+      const received = response.headers["content-length"]
+        ? Number.parseInt(response.headers["content-length"] as string, 10)
+        : Buffer.byteLength(JSON.stringify(response.data));
+      metrics.bytesReceivedFromMojang += received;
+      return response;
+    } catch (error) {
+      metrics.mojangErrors++;
+      throw error;
+    }
   },
 };

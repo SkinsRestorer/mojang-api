@@ -2,6 +2,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { createCacheManager } from "../cache-manager";
 import { batchProcessor } from "../utils/batch-processor";
 import { httpClient } from "../utils/http-client";
+import { metrics } from "../utils/metrics";
 import {
   ErrorType,
   MOJANG_API,
@@ -99,6 +100,7 @@ mojangApiRouter.openapi(
   }),
   async (c) => {
     const { name } = c.req.valid("param");
+    metrics.uuidRequests++;
 
     // Validate username
     if (invalidMinecraftUsername(name)) {
@@ -182,6 +184,7 @@ mojangApiRouter.openapi(
   }),
   async (c) => {
     const { uuid } = c.req.valid("param");
+    metrics.skinRequests++;
     const uuidParsed = tryParseUUID(uuid);
 
     if (!uuidParsed) {
@@ -192,6 +195,7 @@ mojangApiRouter.openapi(
       // Check cache first
       const cachedData = await cacheManager.getUUIDToSkin(uuidParsed);
       if (cachedData) {
+        metrics.skinCacheHits++;
         if (cachedData.value === null) {
           return c.json(
             {
@@ -214,6 +218,7 @@ mojangApiRouter.openapi(
       }
 
       // If not in cache, call Mojang API
+      metrics.skinCacheMisses++;
       const mojangUrl = MOJANG_API.PROFILE_URL.replace(
         "%s",
         convertToNoDashes(uuidParsed),
@@ -238,6 +243,7 @@ mojangApiRouter.openapi(
           response.status,
           response.statusText,
         );
+        metrics.mojangErrors++;
         return c.json({ error: ErrorType.INTERNAL_ERROR } as const, 500);
       }
 
