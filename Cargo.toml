@@ -9,6 +9,7 @@ description = "A caching and batching proxy for Mojang profile APIs"
 [dependencies]
 async-trait = "0.1.91"
 axum = "0.8.9"
+bytes = "1.12.1"
 dotenvy = "0.15.7"
 jiff = { version = "0.2.34", default-features = false, features = ["std"] }
 moka = { version = "0.12.15", features = ["future"] }

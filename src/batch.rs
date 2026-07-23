@@ -4,12 +4,14 @@ use thiserror::Error;
 use tokio::{
     sync::{Semaphore, mpsc, oneshot},
     task::{JoinHandle, JoinSet},
-    time::interval,
+    time::{MissedTickBehavior, interval, timeout},
 };
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{cache::CacheManager, metrics::Metrics, mojang::MojangService, mojang::UpstreamError};
+
+const BATCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy)]
 pub struct BatchConfig {
@@ -79,24 +81,38 @@ impl BatchLookup {
     /// # Errors
     ///
     /// Returns an upstream error when the queue is unavailable or Mojang cannot resolve the batch.
-    pub async fn lookup(&self, name: String) -> Result<Option<Uuid>, UpstreamError> {
-        if let Some(cached) = self.cache.get_uuid(&name).await {
-            self.metrics.increment_uuid_cache_hits();
-            return Ok(cached);
-        }
-        self.metrics.increment_uuid_cache_misses();
-
-        let (response, receiver) = oneshot::channel();
-        self.sender
-            .send(PendingLookup { name, response })
+    pub async fn lookup(&self, mut name: String) -> Result<Option<Uuid>, UpstreamError> {
+        name.make_ascii_lowercase();
+        let request_name = name.clone();
+        let sender = self.sender.clone();
+        let metrics = Arc::clone(&self.metrics);
+        let result = self
+            .cache
+            .get_or_try_insert_uuid(name, async move {
+                metrics.increment_uuid_cache_misses();
+                let (response, receiver) = oneshot::channel();
+                sender
+                    .send(PendingLookup {
+                        name: request_name,
+                        response,
+                    })
+                    .await
+                    .map_err(|_| UpstreamError::Transport)?;
+                receiver.await.map_err(|_| UpstreamError::Transport)?
+            })
             .await
-            .map_err(|_| UpstreamError::Transport)?;
-        receiver.await.map_err(|_| UpstreamError::Transport)?
+            .map_err(|error| *error)?;
+
+        if !result.was_loaded() {
+            self.metrics.increment_uuid_cache_hits();
+        }
+        Ok(result.into_value())
     }
 }
 
 pub struct BatchProcessor {
     lookup: BatchLookup,
+    shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
 
@@ -110,13 +126,22 @@ impl BatchProcessor {
         let (sender, receiver) = mpsc::channel(config.queue_capacity.get());
         let lookup = BatchLookup {
             sender,
-            cache: cache.clone(),
+            cache,
             metrics: Arc::clone(&metrics),
         };
+        let (shutdown, shutdown_receiver) = oneshot::channel();
         let task = tokio::spawn(run_batch_processor(
-            receiver, service, cache, metrics, config,
+            receiver,
+            shutdown_receiver,
+            service,
+            metrics,
+            config,
         ));
-        Self { lookup, task }
+        Self {
+            lookup,
+            shutdown: Some(shutdown),
+            task,
+        }
     }
 
     #[must_use]
@@ -124,18 +149,27 @@ impl BatchProcessor {
         self.lookup.clone()
     }
 
-    pub async fn shutdown(self) {
+    pub async fn shutdown(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
         drop(self.lookup);
-        if let Err(error) = self.task.await {
-            error!(%error, "batch processor stopped unexpectedly");
+        match timeout(BATCH_SHUTDOWN_TIMEOUT, &mut self.task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => error!(%error, "batch processor stopped unexpectedly"),
+            Err(_) => {
+                warn!("batch processor did not drain before the shutdown deadline; aborting it");
+                self.task.abort();
+                let _ = self.task.await;
+            }
         }
     }
 }
 
 async fn run_batch_processor(
     mut receiver: mpsc::Receiver<PendingLookup>,
+    mut shutdown: oneshot::Receiver<()>,
     service: Arc<dyn MojangService>,
-    cache: CacheManager,
     metrics: Arc<Metrics>,
     config: BatchConfig,
 ) {
@@ -143,10 +177,16 @@ async fn run_batch_processor(
     let mut tasks = JoinSet::new();
     let semaphore = Arc::new(Semaphore::new(config.max_in_flight_batches.get()));
     let mut ticker = interval(config.interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     ticker.tick().await;
 
     loop {
         tokio::select! {
+            biased;
+            _ = &mut shutdown => {
+                receiver.close();
+                break;
+            }
             lookup = receiver.recv() => {
                 let Some(lookup) = lookup else {
                     break;
@@ -155,9 +195,11 @@ async fn run_batch_processor(
                 if pending.len() >= config.size.get() {
                     spawn_batch(
                         &mut tasks,
-                        pending.drain(..config.size.get()).collect(),
+                        std::mem::replace(
+                            &mut pending,
+                            Vec::with_capacity(config.size.get()),
+                        ),
                         Arc::clone(&service),
-                        cache.clone(),
                         Arc::clone(&metrics),
                         Arc::clone(&semaphore),
                     )
@@ -168,14 +210,15 @@ async fn run_batch_processor(
                 if !pending.is_empty() {
                     spawn_batch(
                         &mut tasks,
-                        std::mem::take(&mut pending),
+                        std::mem::replace(
+                            &mut pending,
+                            Vec::with_capacity(config.size.get()),
+                        ),
                         Arc::clone(&service),
-                        cache.clone(),
                         Arc::clone(&metrics),
                         Arc::clone(&semaphore),
                     )
                     .await;
-                    pending.reserve(config.size.get());
                 }
             }
             completed = tasks.join_next(), if !tasks.is_empty() => {
@@ -186,8 +229,22 @@ async fn run_batch_processor(
         }
     }
 
+    while let Some(lookup) = receiver.recv().await {
+        pending.push(lookup);
+        if pending.len() >= config.size.get() {
+            spawn_batch(
+                &mut tasks,
+                std::mem::replace(&mut pending, Vec::with_capacity(config.size.get())),
+                Arc::clone(&service),
+                Arc::clone(&metrics),
+                Arc::clone(&semaphore),
+            )
+            .await;
+        }
+    }
+
     if !pending.is_empty() {
-        spawn_batch(&mut tasks, pending, service, cache, metrics, semaphore).await;
+        spawn_batch(&mut tasks, pending, service, metrics, semaphore).await;
     }
     while let Some(result) = tasks.join_next().await {
         if let Err(error) = result {
@@ -200,7 +257,6 @@ async fn spawn_batch(
     tasks: &mut JoinSet<()>,
     batch: Vec<PendingLookup>,
     service: Arc<dyn MojangService>,
-    cache: CacheManager,
     metrics: Arc<Metrics>,
     semaphore: Arc<Semaphore>,
 ) {
@@ -210,42 +266,58 @@ async fn spawn_batch(
     };
     tasks.spawn(async move {
         let _permit = permit;
-        process_batch(batch, service.as_ref(), &cache, &metrics).await;
+        process_batch(batch, service.as_ref(), &metrics).await;
     });
 }
 
 async fn process_batch(
-    batch: Vec<PendingLookup>,
+    mut batch: Vec<PendingLookup>,
     service: &dyn MojangService,
-    cache: &CacheManager,
     metrics: &Metrics,
 ) {
-    let names: Vec<String> = batch.iter().map(|lookup| lookup.name.clone()).collect();
+    batch.retain(|lookup| !lookup.response.is_closed());
+    if batch.is_empty() {
+        return;
+    }
+
+    let (names, responses): (Vec<_>, Vec<_>) = batch
+        .into_iter()
+        .map(|lookup| (lookup.name, lookup.response))
+        .unzip();
     metrics.record_batch(names.len());
     tracing::info!(usernames = names.len(), "processing username batch");
 
     let profiles = match service.lookup_names(&names).await {
         Ok(profiles) => profiles,
         Err(error) => {
-            reject_batch(batch, error);
+            reject_responses(responses, error);
             return;
         }
     };
     let profiles: HashMap<String, Uuid> = profiles
         .into_iter()
-        .map(|(name, uuid)| (name.to_ascii_lowercase(), uuid))
+        .map(|(mut name, uuid)| {
+            name.make_ascii_lowercase();
+            (name, uuid)
+        })
         .collect();
 
-    for lookup in batch {
-        let uuid = profiles.get(&lookup.name.to_ascii_lowercase()).copied();
-        cache.put_uuid(&lookup.name, uuid).await;
-        let _ = lookup.response.send(Ok(uuid));
+    for (name, response) in names.into_iter().zip(responses) {
+        let uuid = profiles.get(&name).copied();
+        let _ = response.send(Ok(uuid));
     }
 }
 
 fn reject_batch(batch: Vec<PendingLookup>, error: UpstreamError) {
-    for lookup in batch {
-        let _ = lookup.response.send(Err(error));
+    reject_responses(batch.into_iter().map(|lookup| lookup.response), error);
+}
+
+fn reject_responses(
+    responses: impl IntoIterator<Item = oneshot::Sender<Result<Option<Uuid>, UpstreamError>>>,
+    error: UpstreamError,
+) {
+    for response in responses {
+        let _ = response.send(Err(error));
     }
 }
 
@@ -418,6 +490,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn coalesces_duplicate_names_before_batching() {
+        let service = Arc::new(FakeMojangService::default());
+        let processor = BatchProcessor::start(
+            service.clone(),
+            CacheManager::new(32, Duration::from_mins(1))
+                .expect("test cache configuration should be valid"),
+            Arc::new(Metrics::default()),
+            test_config(10),
+        );
+        let lookup = processor.lookup();
+
+        let (first, second, third) = tokio::join!(
+            lookup.lookup("Pistonmaster".to_owned()),
+            lookup.lookup("PISTONMASTER".to_owned()),
+            lookup.lookup("pistonmaster".to_owned()),
+        );
+        assert_eq!(first, Ok(None));
+        assert_eq!(second, Ok(None));
+        assert_eq!(third, Ok(None));
+
+        {
+            let calls = service
+                .calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(calls.as_slice(), &[vec!["pistonmaster".to_owned()]]);
+        }
+
+        drop(lookup);
+        processor.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn flushes_immediately_when_batch_is_full() {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
@@ -513,5 +618,25 @@ mod tests {
 
         drop(lookup);
         processor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_external_lookup_handles() {
+        let processor = BatchProcessor::start(
+            Arc::new(FakeMojangService::default()),
+            CacheManager::new(32, Duration::from_mins(1))
+                .expect("test cache configuration should be valid"),
+            Arc::new(Metrics::default()),
+            test_config(10),
+        );
+        let lookup = processor.lookup();
+
+        tokio::time::timeout(Duration::from_millis(250), processor.shutdown())
+            .await
+            .expect("shutdown should not wait for external lookup handles");
+        assert_eq!(
+            lookup.lookup("after-shutdown".to_owned()).await,
+            Err(UpstreamError::Transport)
+        );
     }
 }

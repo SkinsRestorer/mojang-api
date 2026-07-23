@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -21,7 +18,6 @@ pub struct Metrics {
     mojang_requests: AtomicU64,
     mojang_errors: AtomicU64,
     started_at: Instant,
-    last_report_at: Mutex<Instant>,
 }
 
 impl Default for Metrics {
@@ -41,7 +37,6 @@ impl Default for Metrics {
             mojang_requests: AtomicU64::new(0),
             mojang_errors: AtomicU64::new(0),
             started_at: now,
-            last_report_at: Mutex::new(now),
         }
     }
 }
@@ -92,35 +87,29 @@ impl Metrics {
         self.mojang_errors.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn snapshot_and_reset(&self) -> MetricsSnapshot {
+    #[must_use]
+    pub fn snapshot(&self) -> MetricsSnapshot {
         let now = Instant::now();
-        let mut last_report_at = self
-            .last_report_at
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let report_period = now.saturating_duration_since(*last_report_at);
-        *last_report_at = now;
-
         MetricsSnapshot {
-            uuid_requests: self.uuid_requests.swap(0, Ordering::Relaxed),
-            skin_requests: self.skin_requests.swap(0, Ordering::Relaxed),
-            uuid_cache_hits: self.uuid_cache_hits.swap(0, Ordering::Relaxed),
-            uuid_cache_misses: self.uuid_cache_misses.swap(0, Ordering::Relaxed),
-            skin_cache_hits: self.skin_cache_hits.swap(0, Ordering::Relaxed),
-            skin_cache_misses: self.skin_cache_misses.swap(0, Ordering::Relaxed),
-            batches_processed: self.batches_processed.swap(0, Ordering::Relaxed),
-            usernames_batched: self.usernames_batched.swap(0, Ordering::Relaxed),
-            bytes_sent_to_mojang: self.bytes_sent_to_mojang.swap(0, Ordering::Relaxed),
-            bytes_received_from_mojang: self.bytes_received_from_mojang.swap(0, Ordering::Relaxed),
-            mojang_requests: self.mojang_requests.swap(0, Ordering::Relaxed),
-            mojang_errors: self.mojang_errors.swap(0, Ordering::Relaxed),
+            uuid_requests: self.uuid_requests.load(Ordering::Relaxed),
+            skin_requests: self.skin_requests.load(Ordering::Relaxed),
+            uuid_cache_hits: self.uuid_cache_hits.load(Ordering::Relaxed),
+            uuid_cache_misses: self.uuid_cache_misses.load(Ordering::Relaxed),
+            skin_cache_hits: self.skin_cache_hits.load(Ordering::Relaxed),
+            skin_cache_misses: self.skin_cache_misses.load(Ordering::Relaxed),
+            batches_processed: self.batches_processed.load(Ordering::Relaxed),
+            usernames_batched: self.usernames_batched.load(Ordering::Relaxed),
+            bytes_sent_to_mojang: self.bytes_sent_to_mojang.load(Ordering::Relaxed),
+            bytes_received_from_mojang: self.bytes_received_from_mojang.load(Ordering::Relaxed),
+            mojang_requests: self.mojang_requests.load(Ordering::Relaxed),
+            mojang_errors: self.mojang_errors.load(Ordering::Relaxed),
             uptime: now.saturating_duration_since(self.started_at),
-            report_period,
+            report_period: Duration::ZERO,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
     pub uuid_requests: u64,
     pub skin_requests: u64,
@@ -136,4 +125,72 @@ pub struct MetricsSnapshot {
     pub mojang_errors: u64,
     pub uptime: Duration,
     pub report_period: Duration,
+}
+
+impl MetricsSnapshot {
+    #[must_use]
+    pub fn since(self, previous: Self, report_period: Duration) -> Self {
+        Self {
+            uuid_requests: self.uuid_requests.saturating_sub(previous.uuid_requests),
+            skin_requests: self.skin_requests.saturating_sub(previous.skin_requests),
+            uuid_cache_hits: self
+                .uuid_cache_hits
+                .saturating_sub(previous.uuid_cache_hits),
+            uuid_cache_misses: self
+                .uuid_cache_misses
+                .saturating_sub(previous.uuid_cache_misses),
+            skin_cache_hits: self
+                .skin_cache_hits
+                .saturating_sub(previous.skin_cache_hits),
+            skin_cache_misses: self
+                .skin_cache_misses
+                .saturating_sub(previous.skin_cache_misses),
+            batches_processed: self
+                .batches_processed
+                .saturating_sub(previous.batches_processed),
+            usernames_batched: self
+                .usernames_batched
+                .saturating_sub(previous.usernames_batched),
+            bytes_sent_to_mojang: self
+                .bytes_sent_to_mojang
+                .saturating_sub(previous.bytes_sent_to_mojang),
+            bytes_received_from_mojang: self
+                .bytes_received_from_mojang
+                .saturating_sub(previous.bytes_received_from_mojang),
+            mojang_requests: self
+                .mojang_requests
+                .saturating_sub(previous.mojang_requests),
+            mojang_errors: self.mojang_errors.saturating_sub(previous.mojang_errors),
+            uptime: self.uptime,
+            report_period,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::Metrics;
+
+    #[test]
+    fn derives_report_windows_without_resetting_counters() {
+        let metrics = Metrics::default();
+        let baseline = metrics.snapshot();
+        metrics.increment_uuid_requests();
+        metrics.increment_uuid_cache_misses();
+        metrics.record_mojang_request(12);
+        metrics.record_mojang_response(34);
+
+        let current = metrics.snapshot();
+        let window = current.since(baseline, Duration::from_mins(5));
+
+        assert_eq!(window.uuid_requests, 1);
+        assert_eq!(window.uuid_cache_misses, 1);
+        assert_eq!(window.mojang_requests, 1);
+        assert_eq!(window.bytes_sent_to_mojang, 12);
+        assert_eq!(window.bytes_received_from_mojang, 34);
+        assert_eq!(window.report_period, Duration::from_mins(5));
+        assert_eq!(metrics.snapshot().uuid_requests, 1);
+    }
 }

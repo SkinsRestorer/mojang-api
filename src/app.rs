@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
+use serde::Serialize;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -33,6 +34,13 @@ use crate::{
 };
 
 const CLIENT_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=900");
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BorrowedSkinLookupResponse<'a> {
+    exists: bool,
+    skin_property: Option<&'a SkinProperty>,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -154,19 +162,27 @@ async fn lookup_skin(
     state.metrics.increment_skin_requests();
     let uuid = parse_minecraft_uuid(&uuid).ok_or(AppError::InvalidUuid)?;
 
-    let property = if let Some(cached) = state.cache.get_skin(uuid).await {
+    let mojang = Arc::clone(&state.mojang);
+    let metrics = Arc::clone(&state.metrics);
+    let result = state
+        .cache
+        .get_or_try_insert_skin(uuid, async move {
+            metrics.increment_skin_cache_misses();
+            mojang
+                .lookup_skin(uuid)
+                .await
+                .map(|property| property.map(Arc::new))
+        })
+        .await
+        .map_err(|error| *error)?;
+    if !result.was_loaded() {
         state.metrics.increment_skin_cache_hits();
-        cached
-    } else {
-        state.metrics.increment_skin_cache_misses();
-        let property = state.mojang.lookup_skin(uuid).await?;
-        state.cache.put_skin(uuid, property.clone()).await;
-        property
-    };
+    }
+    let property = result.into_value();
 
-    Ok(cacheable_json(SkinLookupResponse {
+    Ok(cacheable_json(BorrowedSkinLookupResponse {
         exists: property.is_some(),
-        skin_property: property,
+        skin_property: property.as_deref(),
     }))
 }
 

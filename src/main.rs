@@ -1,12 +1,14 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, future::IntoFuture, sync::Arc, time::Duration};
 
 use mojang_api::{
     AppState, BatchConfig, BatchProcessor, CacheManager, Config, Metrics, MojangHttpClient,
     MojangService, build_router, reporter::DiscordReporter,
 };
-use tokio::signal;
+use tokio::{signal, sync::oneshot, time::timeout};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
+
+const HTTP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -49,18 +51,40 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         "server started; Swagger UI is available at /swagger"
     );
 
-    if let Err(error) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-    {
-        error!(%error, "HTTP server stopped with an error");
-    }
+    serve_until_shutdown(listener, app).await;
 
     reporter.shutdown().await;
     batch_processor.shutdown().await;
     cache.clear().await;
     info!("server stopped");
     Ok(())
+}
+
+async fn serve_until_shutdown(listener: tokio::net::TcpListener, app: axum::Router) {
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = shutdown_receiver.await;
+        })
+        .into_future();
+    tokio::pin!(server);
+
+    let result = tokio::select! {
+        result = &mut server => Some(result),
+        () = shutdown_signal() => {
+            let _ = shutdown_sender.send(());
+            if let Ok(result) = timeout(HTTP_SHUTDOWN_TIMEOUT, &mut server).await {
+                Some(result)
+            } else {
+                error!("HTTP server did not drain before the shutdown deadline");
+                None
+            }
+        }
+    };
+
+    if let Some(Err(error)) = result {
+        error!(%error, "HTTP server stopped with an error");
+    }
 }
 
 fn initialize_tracing() -> Result<(), Box<dyn Error + Send + Sync>> {

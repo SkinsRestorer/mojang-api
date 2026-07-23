@@ -106,6 +106,12 @@ cargo build --release --locked
 
 ## Architecture
 
-Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and flushes batches when ten requests are queued or after three seconds. Moka stores positive and negative results for six hours, with a maximum of 10,000 username entries and 10,000 skin entries.
+Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and flushes batches when ten distinct requests are queued or after three seconds. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
 
-Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 15-second timeout and select a random configured proxy for each request. The server stops accepting traffic on `SIGINT` or `SIGTERM`, waits for in-flight HTTP work, drains the batch queue, and then exits.
+Moka stores up to 10,000 username entries and uses a 32 MiB weighted budget for skin entries. Positive results expire after six hours. Negative results expire after 15 minutes so newly created profiles and skins become visible sooner.
+
+Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 15-second timeout, reject response bodies larger than 1 MiB, and select a random configured proxy for each request. The rate limiter uses the trusted `CF-Connecting-IP` address and shards client state to reduce lock contention.
+
+Metrics remain cumulative in memory. A Discord report advances its reporting window only after Discord accepts it, so transport errors and non-successful HTTP responses do not discard counters.
+
+On `SIGINT` or `SIGTERM`, the server stops accepting traffic and gives HTTP requests and queued batches up to 30 seconds each to drain. Work that exceeds either deadline is cancelled so shutdown cannot hang indefinitely.

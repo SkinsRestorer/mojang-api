@@ -1,4 +1,8 @@
-use std::{fs, sync::Arc, time::Duration};
+use std::{
+    fs,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use reqwest::Url;
 use serde_json::json;
@@ -29,6 +33,8 @@ impl DiscordReporter {
         };
 
         let (shutdown, mut shutdown_receiver) = oneshot::channel();
+        let initial_snapshot = metrics.snapshot();
+        let reporter_started_at = Instant::now();
         let task = tokio::spawn(async move {
             let client = match reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
@@ -44,11 +50,30 @@ impl DiscordReporter {
             let mut ticker = interval(REPORT_INTERVAL);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             ticker.tick().await;
+            let mut last_successful_snapshot = initial_snapshot;
+            let mut last_successful_report_at = reporter_started_at;
 
             loop {
                 tokio::select! {
-                    _ = ticker.tick() => send_report(&client, &webhook, &metrics).await,
+                    biased;
                     _ = &mut shutdown_receiver => break,
+                    _ = ticker.tick() => {
+                        let now = Instant::now();
+                        let current_snapshot = metrics.snapshot();
+                        let snapshot = current_snapshot.since(
+                            last_successful_snapshot,
+                            now.saturating_duration_since(last_successful_report_at),
+                        );
+                        match send_report(&client, &webhook, snapshot).await {
+                            Ok(()) => {
+                                last_successful_snapshot = current_snapshot;
+                                last_successful_report_at = now;
+                            }
+                            Err(error) => {
+                                error!(%error, "failed to send Discord status report");
+                            }
+                        }
+                    },
                 }
             }
         });
@@ -71,9 +96,23 @@ impl DiscordReporter {
     }
 }
 
+async fn send_report(
+    client: &reqwest::Client,
+    webhook: &Url,
+    snapshot: MetricsSnapshot,
+) -> Result<(), reqwest::Error> {
+    let payload = build_report(snapshot);
+    client
+        .post(webhook.clone())
+        .json(&payload)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
 #[allow(clippy::cast_precision_loss)]
-async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics) {
-    let snapshot = metrics.snapshot_and_reset();
+fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
     let total_requests = snapshot
         .uuid_requests
         .saturating_add(snapshot.skin_requests);
@@ -104,6 +143,7 @@ async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics)
     };
     let rss = process_rss_bytes().map_or_else(|| "Unavailable".to_owned(), format_bytes);
     let load_average = load_average().unwrap_or_else(|| "Unavailable".to_owned());
+    let report_period = format_report_period(snapshot.report_period);
 
     let payload = json!({
         "embeds": [{
@@ -119,7 +159,7 @@ async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics)
                     "inline": false
                 },
                 {
-                    "name": "Requests (5min)",
+                    "name": format!("Requests ({report_period})"),
                     "value": format!(
                         "**Total:** {}\n**UUID Lookups:** {}\n**Skin Lookups:** {}\n**Req/min:** {requests_per_minute:.1}",
                         format_number(total_requests),
@@ -129,7 +169,7 @@ async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics)
                     "inline": true
                 },
                 {
-                    "name": "Cache (5min)",
+                    "name": format!("Cache ({report_period})"),
                     "value": format!(
                         "**Hits:** {}\n**Misses:** {}\n**Hit Rate:** {cache_hit_rate}\n**UUID:** {} hit / {} miss\n**Skin:** {} hit / {} miss",
                         format_number(total_cache_hits),
@@ -142,7 +182,7 @@ async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics)
                     "inline": true
                 },
                 {
-                    "name": "Batching (5min)",
+                    "name": format!("Batching ({report_period})"),
                     "value": format!(
                         "**Batches:** {}\n**Usernames:** {}\n**Avg Size:** {}",
                         format_number(snapshot.batches_processed),
@@ -152,7 +192,7 @@ async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics)
                     "inline": true
                 },
                 {
-                    "name": "Mojang Backend (5min)",
+                    "name": format!("Mojang Backend ({report_period})"),
                     "value": format!(
                         "**Requests:** {}\n**Errors:** {}\n**Sent:** {}\n**Received:** {}",
                         format_number(snapshot.mojang_requests),
@@ -168,9 +208,7 @@ async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics)
         }]
     });
 
-    if let Err(error) = client.post(webhook.clone()).json(&payload).send().await {
-        error!(%error, "failed to send Discord status report");
-    }
+    payload
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -202,6 +240,11 @@ fn format_duration(duration: Duration) -> String {
     }
     parts.push(format!("{seconds}s"));
     parts.join(" ")
+}
+
+fn format_report_period(duration: Duration) -> String {
+    let minutes = duration.as_secs().div_ceil(60);
+    format!("{minutes}min")
 }
 
 fn format_number(number: u64) -> String {
@@ -250,7 +293,7 @@ fn load_average() -> Option<String> {
 mod tests {
     use std::time::Duration;
 
-    use super::{format_bytes, format_duration, format_number};
+    use super::{format_bytes, format_duration, format_number, format_report_period};
 
     #[test]
     fn formats_report_values() {
@@ -258,6 +301,7 @@ mod tests {
         assert_eq!(format_bytes(1_536), "1.50 KB");
         assert_eq!(format_bytes(1_572_864), "1.50 MB");
         assert_eq!(format_duration(Duration::from_secs(90_061)), "1d 1h 1m 1s");
+        assert_eq!(format_report_period(Duration::from_secs(301)), "6min");
         assert_eq!(format_number(1_234_567), "1,234,567");
     }
 }

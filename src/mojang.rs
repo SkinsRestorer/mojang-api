@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
 use rand::seq::IndexedRandom;
 use reqwest::{
     Client, Proxy, StatusCode, Url,
@@ -22,6 +23,8 @@ use crate::{
     types::{MojangBatchProfile, MojangProfile, SkinProperty},
     validation::parse_minecraft_uuid,
 };
+
+const MAX_UPSTREAM_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum UpstreamError {
@@ -99,10 +102,10 @@ impl MojangHttpClient {
         &self,
         request: reqwest::RequestBuilder,
         sent_bytes: usize,
-    ) -> Result<(StatusCode, Vec<u8>), UpstreamError> {
+    ) -> Result<(StatusCode, Bytes), UpstreamError> {
         self.metrics.record_mojang_request(sent_bytes);
 
-        let response = request.send().await.map_err(|error| {
+        let mut response = request.send().await.map_err(|error| {
             self.metrics.increment_mojang_errors();
             if error.is_timeout() {
                 UpstreamError::Timeout
@@ -112,18 +115,39 @@ impl MojangHttpClient {
             }
         })?;
         let status = response.status();
-        let body = response.bytes().await.map_err(|error| {
-            self.metrics.increment_mojang_errors();
-            if error.is_timeout() {
-                UpstreamError::Timeout
-            } else {
-                tracing::error!(%error, "failed to read Mojang response");
-                UpstreamError::Transport
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_UPSTREAM_RESPONSE_BYTES as u64)
+        {
+            return Err(self.record_invalid_response("Mojang response exceeded the size limit"));
+        }
+
+        let initial_capacity = response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(8 * 1024)
+            .min(MAX_UPSTREAM_RESPONSE_BYTES);
+        let mut body = BytesMut::with_capacity(initial_capacity);
+        loop {
+            let chunk = response.chunk().await.map_err(|error| {
+                self.metrics.increment_mojang_errors();
+                if error.is_timeout() {
+                    UpstreamError::Timeout
+                } else {
+                    tracing::error!(%error, "failed to read Mojang response");
+                    UpstreamError::Transport
+                }
+            })?;
+            let Some(chunk) = chunk else {
+                break;
+            };
+            if !try_extend_body(&mut body, &chunk, MAX_UPSTREAM_RESPONSE_BYTES) {
+                return Err(self.record_invalid_response("Mojang response exceeded the size limit"));
             }
-        })?;
+        }
 
         self.metrics.record_mojang_response(body.len());
-        Ok((status, body.to_vec()))
+        Ok((status, body.freeze()))
     }
 
     fn record_status_error(&self, status: StatusCode) -> UpstreamError {
@@ -144,6 +168,7 @@ impl MojangService for MojangHttpClient {
     async fn lookup_names(&self, names: &[String]) -> Result<Vec<(String, Uuid)>, UpstreamError> {
         let body =
             serde_json::to_vec(names).map_err(|error| self.record_invalid_response(error))?;
+        let sent_bytes = body.len();
         let endpoint = self
             .endpoints
             .batch_urls
@@ -153,8 +178,8 @@ impl MojangService for MojangHttpClient {
             .client
             .post(endpoint.clone())
             .header(CONTENT_TYPE, "application/json")
-            .body(body.clone());
-        let (status, response_body) = self.send(request, body.len()).await?;
+            .body(body);
+        let (status, response_body) = self.send(request, sent_bytes).await?;
 
         if !status.is_success() {
             return Err(self.record_status_error(status));
@@ -202,6 +227,18 @@ impl MojangService for MojangHttpClient {
                 signature: property.signature,
             }))
     }
+}
+
+fn try_extend_body(body: &mut BytesMut, chunk: &[u8], limit: usize) -> bool {
+    if body
+        .len()
+        .checked_add(chunk.len())
+        .is_none_or(|length| length > limit)
+    {
+        return false;
+    }
+    body.extend_from_slice(chunk);
+    true
 }
 
 fn load_proxy_list(path: &Path) -> Result<Vec<Url>, ClientBuildError> {
@@ -295,7 +332,18 @@ enum ProxyParseError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProxyParseError, parse_proxy_url};
+    use bytes::BytesMut;
+
+    use super::{ProxyParseError, parse_proxy_url, try_extend_body};
+
+    #[test]
+    fn enforces_response_body_size_while_accumulating_chunks() {
+        let mut body = BytesMut::new();
+
+        assert!(try_extend_body(&mut body, b"abc", 3));
+        assert!(!try_extend_body(&mut body, b"d", 3));
+        assert_eq!(body.as_ref(), b"abc");
+    }
 
     #[test]
     fn parses_direct_and_authenticated_proxy_entries() {

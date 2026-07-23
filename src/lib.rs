@@ -12,7 +12,7 @@ pub mod validation;
 
 pub use app::{AppState, build_router};
 pub use batch::{BatchConfig, BatchConfigError, BatchLookup, BatchProcessor};
-pub use cache::{CacheConfigError, CacheManager};
+pub use cache::{CacheConfigError, CacheLoad, CacheManager};
 pub use config::{Config, MojangEndpoints};
 pub use metrics::Metrics;
 pub use mojang::{MojangHttpClient, MojangService};
