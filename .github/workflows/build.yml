@@ -1,38 +1,41 @@
-name: 'Build and Test'
+name: Build and test
 
 on:
-  - push
-  - pull_request
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    name: Build and Test
-
+    name: Build and test
     runs-on: ubuntu-24.04
+
     steps:
-      - name: 'Checkout repository'
+      - name: Check out repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
-        name: Install pnpm
-        with:
-          run_install: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
 
-      - name: Install Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: 'pnpm'
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-      - name: Install dependencies
-        run: pnpm install
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
-      - name: Run typecheck
-        run: |
-          pnpm typecheck
+      - name: Run tests
+        run: cargo test --all-targets --locked
 
-      - name: Run check
-        run: |
-          pnpm exec biome ci
+      - name: Build release binary
+        run: cargo build --release --locked
