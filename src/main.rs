@@ -9,9 +9,9 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     dotenvy::dotenv().ok();
-    initialize_tracing();
+    initialize_tracing()?;
 
     let config = Config::from_env()?;
     let metrics = Arc::new(Metrics::default());
@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.batch_interval,
             config.queue_capacity,
             config.max_in_flight_batches,
-        ),
+        )?,
     );
     let reporter = DiscordReporter::start(config.discord_webhook.clone(), Arc::clone(&metrics));
     let app = build_router(
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             metrics,
         },
         config.server_port,
-    );
+    )?;
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.server_port)).await?;
     info!(
         port = config.server_port,
@@ -63,9 +63,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn initialize_tracing() {
+fn initialize_tracing() -> Result<(), Box<dyn Error + Send + Sync>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt().with_env_filter(filter).try_init()
 }
 
 async fn shutdown_signal() {

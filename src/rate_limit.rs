@@ -14,6 +14,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use thiserror::Error;
 
 use crate::types::RateLimitResponse;
 
@@ -52,21 +53,24 @@ struct Decision {
 impl RateLimiter {
     /// Creates an in-memory fixed-window rate limiter.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics when `limit` is zero or `window` is empty.
-    #[must_use]
-    pub fn new(limit: u32, window: Duration) -> Self {
-        assert!(limit > 0, "rate limit must be greater than zero");
-        assert!(!window.is_zero(), "rate limit window must not be zero");
-        Self {
+    /// Returns an error when the limit or window is zero.
+    pub fn new(limit: u32, window: Duration) -> Result<Self, RateLimitConfigError> {
+        if limit == 0 {
+            return Err(RateLimitConfigError::ZeroLimit);
+        }
+        if window.is_zero() {
+            return Err(RateLimitConfigError::ZeroWindow);
+        }
+        Ok(Self {
             limit,
             window,
             state: Mutex::new(RateLimiterState {
                 clients: HashMap::new(),
                 last_cleanup: Instant::now(),
             }),
-        }
+        })
     }
 
     fn check(&self, key: &str, now: Instant) -> Decision {
@@ -94,7 +98,7 @@ impl RateLimiter {
 
         let allowed = client.requests < self.limit;
         if allowed {
-            client.requests += 1;
+            client.requests = client.requests.saturating_add(1);
         }
         Decision {
             allowed,
@@ -104,6 +108,14 @@ impl RateLimiter {
                 .saturating_sub(now.saturating_duration_since(client.started_at)),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RateLimitConfigError {
+    #[error("rate limit must be greater than zero")]
+    ZeroLimit,
+    #[error("rate limit window must not be zero")]
+    ZeroWindow,
 }
 
 pub async fn enforce_rate_limit(
@@ -170,11 +182,24 @@ pub async fn enforce_rate_limit(
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::RateLimiter;
+    use super::{RateLimitConfigError, RateLimiter};
+
+    #[test]
+    fn rejects_zero_rate_limit_configuration_values() {
+        assert!(matches!(
+            RateLimiter::new(0, Duration::from_secs(1)),
+            Err(RateLimitConfigError::ZeroLimit)
+        ));
+        assert!(matches!(
+            RateLimiter::new(1, Duration::ZERO),
+            Err(RateLimitConfigError::ZeroWindow)
+        ));
+    }
 
     #[test]
     fn enforces_independent_fixed_windows() {
-        let limiter = RateLimiter::new(2, Duration::from_mins(1));
+        let limiter = RateLimiter::new(2, Duration::from_mins(1))
+            .expect("test rate limiter configuration should be valid");
         let now = Instant::now();
 
         assert!(limiter.check("first", now).allowed);

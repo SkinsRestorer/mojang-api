@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use moka::future::Cache;
+use thiserror::Error;
 use uuid::Uuid;
 
 use crate::types::SkinProperty;
 
 const CACHE_CAPACITY: u64 = 10_000;
 const CACHE_TTL: Duration = Duration::from_hours(6);
+const MAX_CACHE_TTL: Duration = Duration::from_hours(8_760_000);
 
 #[derive(Debug, Clone)]
 pub struct CacheManager {
@@ -16,13 +18,24 @@ pub struct CacheManager {
 
 impl Default for CacheManager {
     fn default() -> Self {
-        Self::new(CACHE_CAPACITY, CACHE_TTL)
+        Self::build(CACHE_CAPACITY, CACHE_TTL)
     }
 }
 
 impl CacheManager {
-    #[must_use]
-    pub fn new(capacity: u64, ttl: Duration) -> Self {
+    /// Creates caches with the requested capacity and time to live.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the time to live exceeds Moka's supported maximum.
+    pub fn new(capacity: u64, ttl: Duration) -> Result<Self, CacheConfigError> {
+        if ttl > MAX_CACHE_TTL {
+            return Err(CacheConfigError::TimeToLiveTooLong);
+        }
+        Ok(Self::build(capacity, ttl))
+    }
+
+    fn build(capacity: u64, ttl: Duration) -> Self {
         Self {
             names: Cache::builder()
                 .max_capacity(capacity)
@@ -56,5 +69,26 @@ impl CacheManager {
         self.skins.invalidate_all();
         self.names.run_pending_tasks().await;
         self.skins.run_pending_tasks().await;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum CacheConfigError {
+    #[error("cache time to live must not exceed 1000 years")]
+    TimeToLiveTooLong,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{CacheConfigError, CacheManager, MAX_CACHE_TTL};
+
+    #[test]
+    fn rejects_unsupported_cache_time_to_live() {
+        assert!(matches!(
+            CacheManager::new(1, MAX_CACHE_TTL.saturating_add(Duration::from_secs(1))),
+            Err(CacheConfigError::TimeToLiveTooLong)
+        ));
     }
 }

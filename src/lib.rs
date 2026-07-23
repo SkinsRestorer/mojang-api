@@ -11,8 +11,9 @@ pub mod types;
 pub mod validation;
 
 pub use app::{AppState, build_router};
-pub use batch::{BatchConfig, BatchLookup, BatchProcessor};
-pub use cache::CacheManager;
+pub use batch::{BatchConfig, BatchConfigError, BatchLookup, BatchProcessor};
+pub use cache::{CacheConfigError, CacheManager};
 pub use config::{Config, MojangEndpoints};
 pub use metrics::Metrics;
 pub use mojang::{MojangHttpClient, MojangService};
+pub use rate_limit::RateLimitConfigError;

@@ -1,9 +1,10 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc, time::Duration};
 
+use thiserror::Error;
 use tokio::{
     sync::{Semaphore, mpsc, oneshot},
     task::{JoinHandle, JoinSet},
-    time::{Instant, interval_at},
+    time::interval,
 };
 use tracing::error;
 use uuid::Uuid;
@@ -12,41 +13,52 @@ use crate::{cache::CacheManager, metrics::Metrics, mojang::MojangService, mojang
 
 #[derive(Debug, Clone, Copy)]
 pub struct BatchConfig {
-    pub size: usize,
-    pub interval: Duration,
-    pub queue_capacity: usize,
-    pub max_in_flight_batches: usize,
+    size: NonZeroUsize,
+    interval: Duration,
+    queue_capacity: NonZeroUsize,
+    max_in_flight_batches: NonZeroUsize,
 }
 
 impl BatchConfig {
     /// Creates batching limits.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics when `size`, `queue_capacity`, or `max_in_flight_batches` is zero.
-    #[must_use]
+    /// Returns an error when any limit or the batching interval is zero.
     pub fn new(
         size: usize,
         interval: Duration,
         queue_capacity: usize,
         max_in_flight_batches: usize,
-    ) -> Self {
-        assert!(size > 0, "batch size must be greater than zero");
-        assert!(
-            queue_capacity > 0,
-            "queue capacity must be greater than zero"
-        );
-        assert!(
-            max_in_flight_batches > 0,
-            "maximum in-flight batches must be greater than zero"
-        );
-        Self {
+    ) -> Result<Self, BatchConfigError> {
+        let size = NonZeroUsize::new(size).ok_or(BatchConfigError::ZeroSize)?;
+        if interval.is_zero() {
+            return Err(BatchConfigError::ZeroInterval);
+        }
+        let queue_capacity =
+            NonZeroUsize::new(queue_capacity).ok_or(BatchConfigError::ZeroQueueCapacity)?;
+        let max_in_flight_batches = NonZeroUsize::new(max_in_flight_batches)
+            .ok_or(BatchConfigError::ZeroMaxInFlightBatches)?;
+
+        Ok(Self {
             size,
             interval,
             queue_capacity,
             max_in_flight_batches,
-        }
+        })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum BatchConfigError {
+    #[error("batch size must be greater than zero")]
+    ZeroSize,
+    #[error("batch interval must be greater than zero")]
+    ZeroInterval,
+    #[error("queue capacity must be greater than zero")]
+    ZeroQueueCapacity,
+    #[error("maximum in-flight batches must be greater than zero")]
+    ZeroMaxInFlightBatches,
 }
 
 struct PendingLookup {
@@ -95,7 +107,7 @@ impl BatchProcessor {
         metrics: Arc<Metrics>,
         config: BatchConfig,
     ) -> Self {
-        let (sender, receiver) = mpsc::channel(config.queue_capacity);
+        let (sender, receiver) = mpsc::channel(config.queue_capacity.get());
         let lookup = BatchLookup {
             sender,
             cache: cache.clone(),
@@ -127,10 +139,11 @@ async fn run_batch_processor(
     metrics: Arc<Metrics>,
     config: BatchConfig,
 ) {
-    let mut pending = Vec::with_capacity(config.size);
+    let mut pending = Vec::with_capacity(config.size.get());
     let mut tasks = JoinSet::new();
-    let semaphore = Arc::new(Semaphore::new(config.max_in_flight_batches));
-    let mut ticker = interval_at(Instant::now() + config.interval, config.interval);
+    let semaphore = Arc::new(Semaphore::new(config.max_in_flight_batches.get()));
+    let mut ticker = interval(config.interval);
+    ticker.tick().await;
 
     loop {
         tokio::select! {
@@ -139,10 +152,10 @@ async fn run_batch_processor(
                     break;
                 };
                 pending.push(lookup);
-                if pending.len() >= config.size {
+                if pending.len() >= config.size.get() {
                     spawn_batch(
                         &mut tasks,
-                        pending.drain(..config.size).collect(),
+                        pending.drain(..config.size.get()).collect(),
                         Arc::clone(&service),
                         cache.clone(),
                         Arc::clone(&metrics),
@@ -162,7 +175,7 @@ async fn run_batch_processor(
                         Arc::clone(&semaphore),
                     )
                     .await;
-                    pending.reserve(config.size);
+                    pending.reserve(config.size.get());
                 }
             }
             completed = tasks.join_next(), if !tasks.is_empty() => {
@@ -258,7 +271,7 @@ mod tests {
         types::SkinProperty,
     };
 
-    use super::{BatchConfig, BatchProcessor};
+    use super::{BatchConfig, BatchConfigError, BatchProcessor};
 
     #[derive(Default)]
     struct FakeMojangService {
@@ -336,6 +349,27 @@ mod tests {
 
     fn test_config(size: usize) -> BatchConfig {
         BatchConfig::new(size, Duration::from_millis(10), 32, 2)
+            .expect("test batch configuration should be valid")
+    }
+
+    #[test]
+    fn rejects_zero_batch_configuration_values() {
+        assert!(matches!(
+            BatchConfig::new(0, Duration::from_secs(1), 1, 1),
+            Err(BatchConfigError::ZeroSize)
+        ));
+        assert!(matches!(
+            BatchConfig::new(1, Duration::ZERO, 1, 1),
+            Err(BatchConfigError::ZeroInterval)
+        ));
+        assert!(matches!(
+            BatchConfig::new(1, Duration::from_secs(1), 0, 1),
+            Err(BatchConfigError::ZeroQueueCapacity)
+        ));
+        assert!(matches!(
+            BatchConfig::new(1, Duration::from_secs(1), 1, 0),
+            Err(BatchConfigError::ZeroMaxInFlightBatches)
+        ));
     }
 
     #[tokio::test]
@@ -346,7 +380,8 @@ mod tests {
             profiles: HashMap::from([("pistonmaster".to_owned(), uuid)]),
             ..FakeMojangService::default()
         });
-        let cache = CacheManager::new(32, Duration::from_mins(1));
+        let cache = CacheManager::new(32, Duration::from_mins(1))
+            .expect("test cache configuration should be valid");
         let processor = BatchProcessor::start(
             service.clone(),
             cache,
@@ -387,9 +422,11 @@ mod tests {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
             service.clone(),
-            CacheManager::new(32, Duration::from_mins(1)),
+            CacheManager::new(32, Duration::from_mins(1))
+                .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
-            BatchConfig::new(2, Duration::from_secs(30), 32, 2),
+            BatchConfig::new(2, Duration::from_secs(30), 32, 2)
+                .expect("test batch configuration should be valid"),
         );
         let lookup = processor.lookup();
 
@@ -422,7 +459,8 @@ mod tests {
         });
         let processor = BatchProcessor::start(
             service,
-            CacheManager::new(32, Duration::from_mins(1)),
+            CacheManager::new(32, Duration::from_mins(1))
+                .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
             test_config(10),
         );
@@ -442,9 +480,11 @@ mod tests {
         let service = Arc::new(BlockingMojangService::default());
         let processor = BatchProcessor::start(
             service.clone(),
-            CacheManager::new(32, Duration::from_mins(1)),
+            CacheManager::new(32, Duration::from_mins(1))
+                .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
-            BatchConfig::new(1, Duration::from_secs(30), 2, 1),
+            BatchConfig::new(1, Duration::from_secs(30), 2, 1)
+                .expect("test batch configuration should be valid"),
         );
         let lookup = processor.lookup();
         let requests = ["First", "Second", "Third"].map(|name| {

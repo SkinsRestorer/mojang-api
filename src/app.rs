@@ -24,7 +24,7 @@ use crate::{
     error::AppError,
     metrics::Metrics,
     mojang::MojangService,
-    rate_limit::{RateLimiter, enforce_rate_limit},
+    rate_limit::{RateLimitConfigError, RateLimiter, enforce_rate_limit},
     types::{
         ErrorResponse, HealthResponse, NotFoundResponse, SkinLookupResponse, SkinProperty,
         UuidLookupResponse,
@@ -73,15 +73,20 @@ impl Modify for ApiServers {
     }
 }
 
-pub fn build_router(state: AppState, local_port: u16) -> Router {
+/// Builds the application router.
+///
+/// # Errors
+///
+/// Returns an error when the built-in rate limiter configuration is invalid.
+pub fn build_router(state: AppState, local_port: u16) -> Result<Router, RateLimitConfigError> {
     let mut openapi = ApiDoc::openapi();
     openapi
         .servers
         .get_or_insert_default()
         .push(Server::new(format!("http://localhost:{local_port}")));
-    let rate_limiter = Arc::new(RateLimiter::new(1_000, Duration::from_mins(1)));
+    let rate_limiter = Arc::new(RateLimiter::new(1_000, Duration::from_mins(1))?);
 
-    Router::new()
+    Ok(Router::new()
         .route("/", get(|| async { Redirect::temporary("/swagger") }))
         .route("/health", get(health))
         .route("/mojang/uuid/{name}", get(lookup_uuid))
@@ -99,7 +104,7 @@ pub fn build_router(state: AppState, local_port: u16) -> Router {
             rate_limiter,
             enforce_rate_limit,
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http()))
 }
 
 #[utoipa::path(
@@ -249,12 +254,14 @@ mod tests {
             }),
         });
         let metrics = Arc::new(Metrics::default());
-        let cache = CacheManager::new(32, Duration::from_mins(1));
+        let cache = CacheManager::new(32, Duration::from_mins(1))
+            .expect("test cache configuration should be valid");
         let batch = BatchProcessor::start(
             Arc::clone(&mojang),
             cache.clone(),
             Arc::clone(&metrics),
-            BatchConfig::new(10, Duration::from_millis(5), 32, 2),
+            BatchConfig::new(10, Duration::from_millis(5), 32, 2)
+                .expect("test batch configuration should be valid"),
         );
         let app = build_router(
             AppState {
@@ -264,7 +271,8 @@ mod tests {
                 metrics,
             },
             3000,
-        );
+        )
+        .expect("test router configuration should be valid");
         (app, batch, uuid)
     }
 

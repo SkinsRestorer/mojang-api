@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use rand::RngExt;
+use rand::seq::IndexedRandom;
 use reqwest::{
     Client, Proxy, StatusCode, Url,
     header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
@@ -83,8 +83,7 @@ impl MojangHttpClient {
             let proxies = Arc::new(proxies);
             let proxy_count = proxies.len();
             builder = builder.proxy(Proxy::custom(move |_| {
-                let index = rand::rng().random_range(0..proxy_count);
-                Some(proxies[index].clone())
+                proxies.choose(&mut rand::rng()).cloned()
             }));
             tracing::info!(proxy_count, "loaded outbound proxies");
         }
@@ -145,8 +144,11 @@ impl MojangService for MojangHttpClient {
     async fn lookup_names(&self, names: &[String]) -> Result<Vec<(String, Uuid)>, UpstreamError> {
         let body =
             serde_json::to_vec(names).map_err(|error| self.record_invalid_response(error))?;
-        let endpoint_index = rand::rng().random_range(0..self.endpoints.batch_urls.len());
-        let endpoint = &self.endpoints.batch_urls[endpoint_index];
+        let endpoint = self
+            .endpoints
+            .batch_urls
+            .choose(&mut rand::rng())
+            .ok_or_else(|| self.record_invalid_response("no Mojang batch endpoint is available"))?;
         let request = self
             .client
             .post(endpoint.clone())
@@ -231,7 +233,7 @@ fn load_proxy_list(path: &Path) -> Result<Vec<Url>, ClientBuildError> {
             Err(error) => {
                 warn!(
                     path = %path.display(),
-                    line = line_number + 1,
+                    line = line_number.saturating_add(1),
                     %error,
                     "ignoring invalid proxy entry"
                 );

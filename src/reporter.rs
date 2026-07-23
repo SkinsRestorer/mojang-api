@@ -74,10 +74,16 @@ impl DiscordReporter {
 #[allow(clippy::cast_precision_loss)]
 async fn send_report(client: &reqwest::Client, webhook: &Url, metrics: &Metrics) {
     let snapshot = metrics.snapshot_and_reset();
-    let total_requests = snapshot.uuid_requests + snapshot.skin_requests;
-    let total_cache_hits = snapshot.uuid_cache_hits + snapshot.skin_cache_hits;
-    let total_cache_misses = snapshot.uuid_cache_misses + snapshot.skin_cache_misses;
-    let total_cache_lookups = total_cache_hits + total_cache_misses;
+    let total_requests = snapshot
+        .uuid_requests
+        .saturating_add(snapshot.skin_requests);
+    let total_cache_hits = snapshot
+        .uuid_cache_hits
+        .saturating_add(snapshot.skin_cache_hits);
+    let total_cache_misses = snapshot
+        .uuid_cache_misses
+        .saturating_add(snapshot.skin_cache_misses);
+    let total_cache_lookups = total_cache_hits.saturating_add(total_cache_misses);
     let cache_hit_rate = if total_cache_lookups == 0 {
         "N/A".to_owned()
     } else {
@@ -200,9 +206,9 @@ fn format_duration(duration: Duration) -> String {
 
 fn format_number(number: u64) -> String {
     let digits = number.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    let mut formatted = String::with_capacity(digits.len().saturating_add(digits.len() / 3));
     for (index, character) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+        if index > 0 && digits.len().saturating_sub(index).is_multiple_of(3) {
             formatted.push(',');
         }
         formatted.push(character);
@@ -231,7 +237,7 @@ fn process_rss_bytes() -> Option<u64> {
         .next()?
         .parse::<u64>()
         .ok()?;
-    Some(kibibytes * 1024)
+    kibibytes.checked_mul(1024)
 }
 
 fn load_average() -> Option<String> {
