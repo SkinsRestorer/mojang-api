@@ -102,7 +102,7 @@ Pushes to `main` build a release image with Railpack and publish it to
 - `main`: the latest published build from `main`
 - `sha-<12-character-commit-sha>`: the build for a specific commit
 
-The workflow uses the `blacksmith-4vcpu-ubuntu-2404` runner and authenticates
+The workflow uses the `ubuntu-24.04` runner and authenticates
 with `GITHUB_TOKEN`, with `packages: write` permission.
 
 Run the published image:
