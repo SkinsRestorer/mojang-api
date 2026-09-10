@@ -93,6 +93,27 @@ Railpack detects the Rust project from `Cargo.toml`, installs its system depende
 
 Set any production configuration variables in the deployment environment. The application reads the platform-provided `PORT` variable directly while retaining `SERVER_PORT` as a compatibility override.
 
+## Run the published image
+
+Pushes to `main` build a release image with Railpack and publish it to
+`ghcr.io/skinsrestorer/mojang-api`. Each build publishes three tags:
+
+- `latest`: the latest published build from `main`
+- `main`: the latest published build from `main`
+- `sha-<12-character-commit-sha>`: the build for a specific commit
+
+The workflow uses the `blacksmith-4vcpu-ubuntu-2404` runner and authenticates
+with `GITHUB_TOKEN`, with `packages: write` permission.
+
+Run the published image:
+
+```bash
+docker run -d --name mojang-api --restart unless-stopped \
+  -p 3000:3000 ghcr.io/skinsrestorer/mojang-api:latest
+```
+
+The service is available at `http://localhost:3000`.
+
 ## Development checks
 
 Run the same checks used by CI:
