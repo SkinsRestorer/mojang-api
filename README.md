@@ -4,7 +4,7 @@ Mojang API Proxy provides cached Minecraft username and skin lookups. It batches
 
 ## Run locally
 
-Install Rust through `rustup`, then start the service. The repository pins Rust 1.97.1 in `rust-toolchain.toml`.
+Install Rust through `rustup`, then start the service. The repository pins Rust 1.99.0 in `rust-toolchain.toml`.
 
 ```bash
 cargo run
@@ -136,3 +136,8 @@ Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 15
 Metrics remain cumulative in memory. A Discord report advances its reporting window only after Discord accepts it, so transport errors and non-successful HTTP responses do not discard counters.
 
 On `SIGINT` or `SIGTERM`, the server stops accepting traffic and gives HTTP requests and queued batches up to 30 seconds each to drain. Work that exceeds either deadline is cancelled so shutdown cannot hang indefinitely.
+
+## Contributing and support
+
+Read [the contribution guide](CONTRIBUTING.md) for development and review.
+Use [the support guide](SUPPORT.md) for questions and issue routing.
