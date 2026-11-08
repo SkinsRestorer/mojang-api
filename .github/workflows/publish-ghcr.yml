@@ -70,6 +70,24 @@ jobs:
           docker push "${IMAGE}:main"
           docker push "${IMAGE}:latest"
 
+      - name: Deploy to Dokploy
+        env:
+          DOKPLOY_WEBHOOK_URL: ${{ secrets.DOKPLOY_WEBHOOK_URL }}
+        run: |
+          : "${DOKPLOY_WEBHOOK_URL:?Set the DOKPLOY_WEBHOOK_URL repository secret}"
+
+          status=$(curl --fail --silent --show-error --output /dev/null \
+            --connect-timeout 10 --max-time 60 \
+            --write-out '%{http_code}' \
+            --request POST "$DOKPLOY_WEBHOOK_URL" \
+            --header "Content-Type: application/json" \
+            --data '{}')
+
+          case "$status" in
+            2??) echo "Dokploy deployment requested." ;;
+            *) echo "::error::Dokploy webhook returned HTTP $status"; exit 1 ;;
+          esac
+
       - name: Stop BuildKit
         if: always()
         run: docker rm -f railpack-buildkit || true
