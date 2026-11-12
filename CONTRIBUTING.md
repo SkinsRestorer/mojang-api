@@ -15,6 +15,10 @@ Keep each change focused. Avoid unrelated formatting and dependency updates.
 
 Install Rust through Rustup. Use `rust-toolchain.toml` when present, otherwise the minimum version in `Cargo.toml`. The lockfile pins dependencies.
 
+Install [Lefthook](https://lefthook.dev/install/) 1.13.6 or newer, then run `lefthook install` once per checkout.
+The pre-commit hook checks staged whitespace and Rust formatting. Before pushing Rust or dependency changes, Clippy checks all targets and features.
+The pre-push hook compares `HEAD` with the branch's upstream. Keep the upstream set to the branch that you push.
+
 Run the commands below from the repository root unless a command names another directory.
 On Windows, use `gradlew.bat` in place of `./gradlew` for Gradle commands.
 

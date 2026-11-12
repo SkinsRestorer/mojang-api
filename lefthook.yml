@@ -1,0 +1,17 @@
+min_version: 1.13.6
+
+pre-commit:
+  commands:
+    whitespace:
+      run: git diff --cached --check
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+      files: git diff --cached --name-only --diff-filter=ACMR
+
+pre-push:
+  commands:
+    clippy:
+      run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      files: git diff --name-only @{upstream} HEAD
+      glob: "{*.rs,Cargo.toml,Cargo.lock,rust-toolchain.toml}"
