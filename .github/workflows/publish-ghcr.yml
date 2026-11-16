@@ -17,9 +17,17 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  publish:
-    name: Build and publish image
-    runs-on: ubuntu-26.04
+  build:
+    name: Build ${{ matrix.arch }} image
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-26.04-arm
 
     steps:
       - name: Checkout repository
@@ -35,6 +43,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Railpack
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$HOME/.local/bin"
           curl --fail --silent --show-error --location https://railpack.com/install.sh | sh -s -- --bin-dir "$HOME/.local/bin"
@@ -46,29 +56,45 @@ jobs:
           docker run --rm --privileged -d --name railpack-buildkit moby/buildkit:latest
           echo "BUILDKIT_HOST=docker-container://railpack-buildkit" >> "$GITHUB_ENV"
 
-      - name: Build image with Railpack
-        id: image
+      - name: Build and push image with Railpack
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          tag="${REGISTRY}/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::12}-${ARCH}"
+
+          railpack build --name "$tag" .
+          docker push "$tag"
+
+      - name: Stop BuildKit
+        if: always()
+        run: docker rm -f railpack-buildkit || true
+
+  publish:
+    name: Publish multi-arch image
+    needs: build
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
         run: |
           image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
-          short_sha="${GITHUB_SHA::12}"
+          sha_tag="${image}:sha-${GITHUB_SHA::12}"
 
-          railpack build --name "${image}:sha-${short_sha}" .
-          docker tag "${image}:sha-${short_sha}" "${image}:main"
-          docker tag "${image}:sha-${short_sha}" "${image}:latest"
+          docker buildx imagetools create \
+            --tag "$sha_tag" \
+            --tag "${image}:main" \
+            --tag "${image}:latest" \
+            "${sha_tag}-amd64" \
+            "${sha_tag}-arm64"
 
-          {
-            echo "image=${image}"
-            echo "short_sha=${short_sha}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Push image
-        env:
-          IMAGE: ${{ steps.image.outputs.image }}
-          SHORT_SHA: ${{ steps.image.outputs.short_sha }}
-        run: |
-          docker push "${IMAGE}:sha-${SHORT_SHA}"
-          docker push "${IMAGE}:main"
-          docker push "${IMAGE}:latest"
+          docker buildx imagetools inspect "$sha_tag"
 
       - name: Deploy to Dokploy
         env:
@@ -87,7 +113,3 @@ jobs:
             2??) echo "Dokploy deployment requested." ;;
             *) echo "::error::Dokploy webhook returned HTTP $status"; exit 1 ;;
           esac
-
-      - name: Stop BuildKit
-        if: always()
-        run: docker rm -f railpack-buildkit || true
