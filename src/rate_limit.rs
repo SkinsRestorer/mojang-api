@@ -69,7 +69,10 @@ impl RateLimiter {
             return Err(RateLimitConfigError::ZeroWindow);
         }
         let policy_header = HeaderValue::from_str(&format!("{limit};w={}", window.as_secs()))
-            .map_err(|_| RateLimitConfigError::InvalidPolicyHeader)?;
+            .map_err(|error| {
+                tracing::error!(%error, "could not construct rate limit policy header");
+                RateLimitConfigError::InvalidPolicyHeader
+            })?;
         let now = Instant::now();
         Ok(Self {
             limit,

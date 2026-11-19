@@ -111,7 +111,10 @@ async fn send_report(
     Ok(())
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "report percentages and rates are rounded for display"
+)]
 fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
     let total_requests = snapshot
         .uuid_requests
@@ -211,7 +214,10 @@ fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
     payload
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "report byte sizes are rounded to two decimal places for display"
+)]
 fn format_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
@@ -259,7 +265,10 @@ fn format_number(number: u64) -> String {
     formatted
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the report rounds the average batch size to one decimal place"
+)]
 fn average_batch_size(snapshot: MetricsSnapshot) -> String {
     if snapshot.batches_processed == 0 {
         "N/A".to_owned()

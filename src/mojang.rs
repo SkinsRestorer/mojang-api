@@ -288,9 +288,8 @@ fn parse_proxy_url(value: &str) -> Result<Url, ProxyParseError> {
     let password = parts.next();
 
     let (host, port) = host.zip(port).ok_or(ProxyParseError::Format)?;
-    let port: u16 = port.parse().map_err(|_| ProxyParseError::Port)?;
-    let mut url =
-        Url::parse(&format!("http://{host}:{port}")).map_err(|_| ProxyParseError::Format)?;
+    let port: u16 = port.parse().map_err(ProxyParseError::Port)?;
+    let mut url = Url::parse(&format!("http://{host}:{port}")).map_err(ProxyParseError::Url)?;
 
     match (username, password) {
         (Some(username), Some(password)) if !username.is_empty() => {
@@ -325,7 +324,9 @@ enum ProxyParseError {
     #[error("expected ip:port or ip:port:user:password")]
     Format,
     #[error("proxy port is invalid")]
-    Port,
+    Port(#[source] std::num::ParseIntError),
+    #[error("expected ip:port or ip:port:user:password")]
+    Url(#[source] url::ParseError),
     #[error("proxy credentials are invalid")]
     Credentials,
 }
@@ -362,10 +363,14 @@ mod tests {
     #[test]
     fn rejects_incomplete_proxy_entries() {
         assert_eq!(parse_proxy_url("127.0.0.1"), Err(ProxyParseError::Format));
-        assert_eq!(
+        assert!(matches!(
             parse_proxy_url("127.0.0.1:not-a-port"),
-            Err(ProxyParseError::Port)
-        );
+            Err(ProxyParseError::Port(_))
+        ));
+        assert!(matches!(
+            parse_proxy_url("bad host:8080"),
+            Err(ProxyParseError::Url(_))
+        ));
         assert_eq!(
             parse_proxy_url("127.0.0.1:8080:user"),
             Err(ProxyParseError::Format)

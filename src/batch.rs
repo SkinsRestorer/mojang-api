@@ -97,8 +97,14 @@ impl BatchLookup {
                         response,
                     })
                     .await
-                    .map_err(|_| UpstreamError::Transport)?;
-                receiver.await.map_err(|_| UpstreamError::Transport)?
+                    .map_err(|error| {
+                        warn!(%error, "could not queue Mojang lookup");
+                        UpstreamError::Transport
+                    })?;
+                receiver.await.map_err(|error| {
+                    warn!(%error, "Mojang lookup ended without a response");
+                    UpstreamError::Transport
+                })?
             })
             .await
             .map_err(|error| *error)?;

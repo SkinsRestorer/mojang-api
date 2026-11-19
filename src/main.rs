@@ -5,15 +5,21 @@ use mojang_api::{
     MojangService, build_router, reporter::DiscordReporter,
 };
 use tokio::{signal, sync::oneshot, time::timeout};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 const HTTP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    dotenvy::dotenv().ok();
+    let dotenv = dotenvy::dotenv();
     initialize_tracing()?;
+    if let Err(error) = dotenv
+        && !error.not_found()
+    {
+        // Parse errors can contain the original line, including credentials.
+        warn!("could not load .env");
+    }
 
     let config = Config::from_env()?;
     let metrics = Arc::new(Metrics::default());
