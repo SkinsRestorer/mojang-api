@@ -3,6 +3,7 @@ pub mod batch;
 pub mod cache;
 pub mod config;
 pub mod error;
+mod http_client;
 pub mod metrics;
 pub mod mojang;
 pub mod rate_limit;

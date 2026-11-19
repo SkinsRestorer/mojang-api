@@ -10,8 +10,8 @@ use tracing_subscriber::EnvFilter;
 
 const HTTP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Load .env before starting any runtime threads that could read the environment.
     let dotenv = dotenvy::dotenv();
     initialize_tracing()?;
     if let Err(error) = dotenv
@@ -30,6 +30,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         config.request_timeout,
         Arc::clone(&metrics),
     )?);
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(config, metrics, cache, mojang))
+}
+
+async fn run(
+    config: Config,
+    metrics: Arc<Metrics>,
+    cache: CacheManager,
+    mojang: Arc<dyn MojangService>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let batch_processor = BatchProcessor::start(
         Arc::clone(&mojang),
         cache.clone(),

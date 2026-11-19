@@ -13,7 +13,10 @@ use tokio::{
 };
 use tracing::{error, info};
 
-use crate::metrics::{Metrics, MetricsSnapshot};
+use crate::{
+    http_client::http_client_builder,
+    metrics::{Metrics, MetricsSnapshot},
+};
 
 const REPORT_INTERVAL: Duration = Duration::from_mins(5);
 
@@ -36,8 +39,7 @@ impl DiscordReporter {
         let initial_snapshot = metrics.snapshot();
         let reporter_started_at = Instant::now();
         let task = tokio::spawn(async move {
-            let client = match reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
+            let client = match http_client_builder(Duration::from_secs(15))
                 .https_only(true)
                 .build()
             {
@@ -64,7 +66,14 @@ impl DiscordReporter {
                             last_successful_snapshot,
                             now.saturating_duration_since(last_successful_report_at),
                         );
-                        match send_report(&client, &webhook, snapshot).await {
+                        let payload = match tokio::task::spawn_blocking(move || build_report(snapshot)).await {
+                            Ok(payload) => payload,
+                            Err(error) => {
+                                error!(%error, "failed to build Discord status report");
+                                continue;
+                            }
+                        };
+                        match send_report(&client, &webhook, &payload).await {
                             Ok(()) => {
                                 last_successful_snapshot = current_snapshot;
                                 last_successful_report_at = now;
@@ -103,12 +112,11 @@ impl DiscordReporter {
 async fn send_report(
     client: &reqwest::Client,
     webhook: &Url,
-    snapshot: MetricsSnapshot,
+    payload: &serde_json::Value,
 ) -> Result<(), reqwest::Error> {
-    let payload = build_report(snapshot);
     client
         .post(webhook.clone())
-        .json(&payload)
+        .json(payload)
         .send()
         .await?
         .error_for_status()?;
@@ -285,6 +293,10 @@ fn average_batch_size(snapshot: MetricsSnapshot) -> String {
 }
 
 fn process_rss_bytes() -> Option<u64> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "The reporter reads procfs on a Tokio blocking worker."
+    )]
     let status = fs::read_to_string("/proc/self/status").ok()?;
     let kibibytes = status
         .lines()
@@ -297,6 +309,10 @@ fn process_rss_bytes() -> Option<u64> {
 }
 
 fn load_average() -> Option<String> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "The reporter reads procfs on a Tokio blocking worker."
+    )]
     let load_average = fs::read_to_string("/proc/loadavg").ok()?;
     let values = load_average.split_whitespace().take(3).collect::<Vec<_>>();
     (values.len() == 3).then(|| values.join(" / "))

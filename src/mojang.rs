@@ -1,3 +1,5 @@
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use std::{
     collections::HashSet,
     fs,
@@ -19,6 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     config::MojangEndpoints,
+    http_client::http_client_builder,
     metrics::Metrics,
     types::{MojangBatchProfile, MojangProfile, SkinProperty},
     validation::parse_minecraft_uuid,
@@ -77,9 +80,8 @@ impl MojangHttpClient {
             .map(load_proxy_list)
             .transpose()?
             .unwrap_or_default();
-        let mut builder = Client::builder()
+        let mut builder = http_client_builder(timeout)
             .default_headers(default_headers)
-            .timeout(timeout)
             .https_only(true);
 
         if !proxies.is_empty() {
@@ -242,6 +244,10 @@ fn try_extend_body(body: &mut BytesMut, chunk: &[u8], limit: usize) -> bool {
 }
 
 fn load_proxy_list(path: &Path) -> Result<Vec<Url>, ClientBuildError> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "The application loads the proxy list during synchronous startup before starting Tokio."
+    )]
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

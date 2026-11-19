@@ -1,3 +1,5 @@
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{
@@ -401,10 +403,13 @@ mod tests {
             .expect("request should succeed");
         assert_eq!(response.status(), StatusCode::OK);
         let document: Value = response_json(response).await;
-        assert_eq!(document["info"]["title"], "Mojang API Proxy");
-        assert!(document["paths"]["/mojang/uuid/{name}"].is_object());
-        assert!(document["paths"]["/mojang/skin/{uuid}"].is_object());
-        assert!(document["paths"]["/health"].is_object());
+        let title = document.pointer("/info/title").and_then(Value::as_str);
+        assert_eq!(title, Some("Mojang API Proxy"));
+
+        let paths = document.get("paths").expect("OpenAPI paths should exist");
+        for route in ["/mojang/uuid/{name}", "/mojang/skin/{uuid}", "/health"] {
+            assert!(paths.get(route).is_some_and(Value::is_object));
+        }
 
         batch.shutdown().await;
     }

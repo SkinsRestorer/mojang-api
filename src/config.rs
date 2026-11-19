@@ -1,3 +1,5 @@
+#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+
 use std::{env, num::ParseIntError, path::PathBuf, time::Duration};
 
 use reqwest::Url;

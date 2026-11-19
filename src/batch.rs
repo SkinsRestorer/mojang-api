@@ -542,6 +542,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             assert_eq!(calls.as_slice(), &[vec!["pistonmaster".to_owned()]]);
+            drop(calls);
         }
 
         drop(lookup);

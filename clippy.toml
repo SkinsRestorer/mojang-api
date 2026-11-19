@@ -1,3 +1,19 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "Pass configuration explicitly instead of mutating the process environment." },
+    { path = "std::env::remove_var", reason = "Pass configuration explicitly instead of mutating the process environment." },
+    { path = "std::thread::sleep", reason = "Use tokio::time::sleep so other tasks can run." },
+    { path = "std::process::Command::output", reason = "Use tokio::process::Command so child processes can be managed asynchronously." },
+    { path = "std::process::Command::status", reason = "Use tokio::process::Command so child processes can be managed asynchronously." },
+    { path = "std::process::Command::spawn", reason = "Use tokio::process::Command so child processes can be managed asynchronously." },
+    { path = "std::fs::read", reason = "Use tokio::fs or run synchronous file operations with tokio::task::spawn_blocking." },
+    { path = "std::fs::read_to_string", reason = "Use tokio::fs or run synchronous file operations with tokio::task::spawn_blocking." },
+    { path = "std::fs::write", reason = "Use tokio::fs or run synchronous file operations with tokio::task::spawn_blocking." },
+    { path = "reqwest::Client::new", reason = "Use crate::http_client::http_client_builder for explicit connect and request timeouts." },
+    { path = "reqwest::get", reason = "Use a shared client from crate::http_client::http_client_builder for explicit connect and request timeouts." },
+    { path = "reqwest::Client::builder", reason = "Use crate::http_client::http_client_builder to apply the service timeouts." },
+    { path = "reqwest::ClientBuilder::new", reason = "Use crate::http_client::http_client_builder to apply the service timeouts." },
+]
