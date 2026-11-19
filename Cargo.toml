@@ -53,10 +53,23 @@ strip = true
 
 [lints.rust]
 unsafe_code = "forbid"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+let_underscore_drop = "warn"
+unit_bindings = "warn"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Noisy nursery lints
+missing_const_for_fn = "allow"
+option_if_let_else = "allow"
+future_not_send = "allow"
+redundant_pub_crate = "allow"
+suboptimal_flops = "allow"
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
@@ -87,3 +100,13 @@ significant_drop_tightening = "warn"
 # Better test failures
 assertions_on_result_states = "warn"
 missing_assert_message = "warn"
+# Additional safety and correctness checks
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+panic_in_result_fn = "warn"
+unreachable = "warn"
+clone_on_ref_ptr = "warn"
+wildcard_enum_match_arm = "warn"
+format_push_string = "warn"
+empty_structs_with_brackets = "warn"
+empty_enum_variants_with_brackets = "warn"

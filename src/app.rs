@@ -205,7 +205,7 @@ async fn not_found() -> impl IntoResponse {
     )
 }
 
-fn cacheable_json(value: impl serde::Serialize) -> Response {
+fn cacheable_json(value: impl Serialize) -> Response {
     let mut response = Json(value).into_response();
     response
         .headers_mut()

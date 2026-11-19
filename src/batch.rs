@@ -170,11 +170,8 @@ impl BatchProcessor {
             Err(_) => {
                 warn!("batch processor did not drain before the shutdown deadline; aborting it");
                 self.task.abort();
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "After aborting, we only need to wait for the task to stop."
-                )]
-                let _ = self.task.await;
+                // After aborting, wait for the task to stop and discard the join result.
+                drop(self.task.await);
             }
         }
     }
@@ -413,6 +410,10 @@ mod tests {
                 .collect())
         }
 
+        #[expect(
+            clippy::unreachable,
+            reason = "A skin lookup is an unexpected call to the batch test double."
+        )]
         async fn lookup_skin(&self, _uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
             unreachable!("skin lookup is not used by batch tests")
         }
@@ -435,6 +436,10 @@ mod tests {
             Ok(Vec::new())
         }
 
+        #[expect(
+            clippy::unreachable,
+            reason = "A skin lookup is an unexpected call to the batch test double."
+        )]
         async fn lookup_skin(&self, _uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
             unreachable!("skin lookup is not used by batch tests")
         }
@@ -476,7 +481,7 @@ mod tests {
         let cache = CacheManager::new(32, Duration::from_mins(1))
             .expect("test cache configuration should be valid");
         let processor = BatchProcessor::start(
-            service.clone(),
+            Arc::<FakeMojangService>::clone(&service),
             cache,
             Arc::new(Metrics::default()),
             test_config(10),
@@ -514,7 +519,7 @@ mod tests {
     async fn coalesces_duplicate_names_before_batching() {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
-            service.clone(),
+            Arc::<FakeMojangService>::clone(&service),
             CacheManager::new(32, Duration::from_mins(1))
                 .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
@@ -547,7 +552,7 @@ mod tests {
     async fn flushes_immediately_when_batch_is_full() {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
-            service.clone(),
+            Arc::<FakeMojangService>::clone(&service),
             CacheManager::new(32, Duration::from_mins(1))
                 .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
@@ -605,7 +610,7 @@ mod tests {
     async fn applies_backpressure_at_the_in_flight_batch_limit() {
         let service = Arc::new(BlockingMojangService::default());
         let processor = BatchProcessor::start(
-            service.clone(),
+            Arc::<BlockingMojangService>::clone(&service),
             CacheManager::new(32, Duration::from_mins(1))
                 .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
