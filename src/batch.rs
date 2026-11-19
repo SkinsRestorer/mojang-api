@@ -157,6 +157,10 @@ impl BatchProcessor {
 
     pub async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The batch processor may already have stopped and dropped its shutdown receiver."
+            )]
             let _ = shutdown.send(());
         }
         drop(self.lookup);
@@ -166,6 +170,10 @@ impl BatchProcessor {
             Err(_) => {
                 warn!("batch processor did not drain before the shutdown deadline; aborting it");
                 self.task.abort();
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "After aborting, we only need to wait for the task to stop."
+                )]
                 let _ = self.task.await;
             }
         }
@@ -310,6 +318,10 @@ async fn process_batch(
 
     for (name, response) in names.into_iter().zip(responses) {
         let uuid = profiles.get(&name).copied();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "The request may have been canceled before the batch completed."
+        )]
         let _ = response.send(Ok(uuid));
     }
 }
@@ -323,6 +335,10 @@ fn reject_responses(
     error: UpstreamError,
 ) {
     for response in responses {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "The request may have been canceled before the error could be delivered."
+        )]
         let _ = response.send(Err(error));
     }
 }
@@ -410,12 +426,11 @@ mod tests {
         ) -> Result<Vec<(String, Uuid)>, UpstreamError> {
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(active, Ordering::SeqCst);
-            let permit = self
-                .release
+            self.release
                 .acquire()
                 .await
-                .expect("test semaphore should remain open");
-            permit.forget();
+                .expect("test semaphore should remain open")
+                .forget();
             self.active.fetch_sub(1, Ordering::SeqCst);
             Ok(Vec::new())
         }
@@ -541,14 +556,14 @@ mod tests {
         );
         let lookup = processor.lookup();
 
-        let completed = tokio::time::timeout(Duration::from_millis(250), async {
+        let (_first, _second) = tokio::time::timeout(Duration::from_millis(250), async {
             tokio::join!(
                 lookup.lookup("First".to_owned()),
                 lookup.lookup("Second".to_owned())
             )
         })
-        .await;
-        assert!(completed.is_ok());
+        .await
+        .expect("the full batch should complete before the timeout");
         assert_eq!(
             service
                 .calls

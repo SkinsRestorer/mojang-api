@@ -70,6 +70,10 @@ async fn serve_until_shutdown(listener: tokio::net::TcpListener, app: axum::Rout
     let (shutdown_sender, shutdown_receiver) = oneshot::channel();
     let server = axum::serve(listener, app)
         .with_graceful_shutdown(async {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "Both a shutdown signal and closure of the channel let the server drain."
+            )]
             let _ = shutdown_receiver.await;
         })
         .into_future();
@@ -78,6 +82,7 @@ async fn serve_until_shutdown(listener: tokio::net::TcpListener, app: axum::Rout
     let result = tokio::select! {
         result = &mut server => Some(result),
         () = shutdown_signal() => {
+            #[expect(clippy::let_underscore_must_use, reason = "The server may already have dropped its shutdown receiver.")]
             let _ = shutdown_sender.send(());
             if let Ok(result) = timeout(HTTP_SHUTDOWN_TIMEOUT, &mut server).await {
                 Some(result)

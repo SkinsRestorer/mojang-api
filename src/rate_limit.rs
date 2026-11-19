@@ -120,12 +120,15 @@ impl RateLimiter {
         if allowed {
             client.requests = client.requests.saturating_add(1);
         }
+        let remaining = self.limit.saturating_sub(client.requests);
+        let started_at = client.started_at;
+        drop(state);
         Decision {
             allowed,
-            remaining: self.limit.saturating_sub(client.requests),
+            remaining,
             reset_after: self
                 .window
-                .saturating_sub(now.saturating_duration_since(client.started_at)),
+                .saturating_sub(now.saturating_duration_since(started_at)),
         }
     }
 }

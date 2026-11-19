@@ -86,6 +86,10 @@ impl DiscordReporter {
 
     pub async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The reporter may already have stopped and dropped its shutdown receiver."
+            )]
             let _ = shutdown.send(());
         }
         if let Some(task) = self.task.take()
