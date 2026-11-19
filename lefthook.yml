@@ -14,4 +14,20 @@ pre-push:
     clippy:
       run: cargo clippy --all-targets --all-features --locked -- -D warnings
       files: git diff --name-only @{upstream} HEAD
-      glob: "{*.rs,Cargo.toml,Cargo.lock,rust-toolchain.toml}"
+      glob: "{*.rs,Cargo.toml,Cargo.lock,rust-toolchain.toml,clippy.toml}"
+
+commit-msg:
+  commands:
+    conventional-commit:
+      run: |
+        subject=$(sed -n '1{p;q;}' "{1}")
+        case "$subject" in
+          'Merge '*|'Revert "'*|'fixup! '*|'squash! '*|'amend! '*) exit 0 ;;
+        esac
+
+        if printf '%s\n' "$subject" | grep -Eq '^(feat|fix|docs|refactor|test|chore|ci|build|perf|style|revert)(\([^()[:space:]]+\))?!?: [^[:space:]]'; then
+          exit 0
+        fi
+
+        printf '%s\n' 'Use a Conventional Commit on the first line, for example: fix(cache): handle expired entries' >&2
+        exit 1
