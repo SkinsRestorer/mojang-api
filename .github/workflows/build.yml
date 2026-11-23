@@ -44,9 +44,6 @@ jobs:
       - name: Run tests
         run: cargo test --all-targets --locked
 
-      - name: Build release binary
-        run: cargo build --release --locked
-
   msrv:
     name: Check minimum supported Rust version
     runs-on: ubuntu-26.04
@@ -57,15 +54,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read minimum supported Rust version
-        id: msrv
-        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - name: Select minimum supported Rust version
+        # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml for all later steps, so rustup does not
+        # install the pinned toolchain and the cache key uses the MSRV compiler.
+        run: echo "RUSTUP_TOOLCHAIN=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
-        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Check with the minimum supported Rust version
-        run: cargo "+${{ steps.msrv.outputs.version }}" check --all-targets --locked
+        run: cargo check --all-targets --locked
