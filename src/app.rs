@@ -132,10 +132,12 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
         )
 }
 
+/// Look up a player's UUID by username
 #[utoipa::path(
     get,
     path = "/mojang/uuid/{name}",
-    params(("name" = String, Path, description = "Minecraft username to convert to UUID", example = "Pistonmaster")),
+    params(("name" = String, Path, description = "Minecraft username to convert to UUID", example = "Pistonmaster",
+        pattern = r"^[A-Za-z0-9_-]{1,16}$")),
     responses(
         (status = 200, description = "`exists` is `false` when no player has this name", body = UuidLookupResponse,
             headers(("Cache-Control" = String, description = "`public, max-age=900` when `exists` is `true`, otherwise `public, max-age=60`"))),
@@ -175,10 +177,12 @@ async fn lookup_uuid(
     ))
 }
 
+/// Look up a player's skin by UUID
 #[utoipa::path(
     get,
     path = "/mojang/skin/{uuid}",
-    params(("uuid" = String, Path, description = "Minecraft UUID to get skin data for, with or without dashes", example = "b1ae0778-4817-436c-96a3-a72c67cda060")),
+    params(("uuid" = String, Path, description = "Minecraft UUID to get skin data for, with or without dashes", example = "b1ae0778-4817-436c-96a3-a72c67cda060",
+        pattern = r"^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})$")),
     responses(
         (status = 200, description = "`exists` is `false` when the profile or its skin does not exist", body = SkinLookupResponse,
             headers(("Cache-Control" = String, description = "`public, max-age=900` when `exists` is `true`, otherwise `public, max-age=60`"))),
@@ -236,6 +240,7 @@ async fn lookup_skin(
     ))
 }
 
+/// Check whether the service can look up usernames
 #[utoipa::path(
     get,
     path = "/health",
@@ -313,6 +318,7 @@ mod tests {
     };
     use serde_json::Value;
     use tower::ServiceExt;
+    use utoipa::OpenApi;
     use uuid::Uuid;
 
     use crate::{
@@ -321,9 +327,10 @@ mod tests {
         metrics::Metrics,
         mojang::{MojangService, UpstreamError},
         types::{ErrorResponse, ErrorType, SkinLookupResponse, SkinProperty, UuidLookupResponse},
+        validation::{is_valid_minecraft_username, parse_minecraft_uuid},
     };
 
-    use super::{AppState, build_router, enforce_deadline};
+    use super::{ApiDoc, AppState, build_router, enforce_deadline};
 
     struct FakeMojangService {
         uuid: Uuid,
@@ -474,6 +481,66 @@ mod tests {
         );
 
         batch.shutdown().await;
+    }
+
+    #[test]
+    fn documented_path_patterns_match_validation() {
+        let document = serde_json::to_value(ApiDoc::openapi()).expect("document should serialize");
+        let parameters = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths should exist")
+            .values()
+            .filter_map(|path| path.pointer("/get/parameters").and_then(Value::as_array))
+            .flatten()
+            .collect::<Vec<_>>();
+        let pattern = |name: &str| {
+            let pattern = parameters
+                .iter()
+                .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                .and_then(|parameter| parameter.pointer("/schema/pattern"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("`{name}` should document a pattern"));
+            regex::Regex::new(pattern).expect("pattern should compile")
+        };
+
+        let name = pattern("name");
+        for value in [
+            "Pistonmaster",
+            "_",
+            "old-name",
+            "sixteen_chars_xx",
+            "",
+            "seventeen_chars_x",
+            "invalid name",
+            "Pistonm\u{e4}str",
+            "name\n",
+        ] {
+            assert_eq!(
+                name.is_match(value),
+                is_valid_minecraft_username(value),
+                "{value:?}"
+            );
+        }
+
+        let uuid = pattern("uuid");
+        for value in [
+            "b1ae0778-4817-436c-96a3-a72c67cda060",
+            "B1AE07784817436C96A3A72C67CDA060",
+            "b1ae07784817436c96a3a72c67cda060",
+            "{b1ae0778-4817-436c-96a3-a72c67cda060}",
+            "b1ae07784-817-436c-96a3-a72c67cda060",
+            "b1ae0778-4817-436c-96a3a72c67cda060",
+            "b1ae07784817436c96a3a72c67cda06g",
+            "+1ae07784817436c96a3a72c67cda060",
+            "urn:uuid:b1ae0778-4817-436c-96a3-a72c67cda060",
+        ] {
+            assert_eq!(
+                uuid.is_match(value),
+                parse_minecraft_uuid(value).is_some(),
+                "{value:?}"
+            );
+        }
     }
 
     #[tokio::test]

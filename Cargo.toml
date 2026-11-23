@@ -52,6 +52,8 @@ uuid = { version = "1.24.0", features = ["serde"] }
 [dev-dependencies]
 # The tests run real servers with `axum::serve`.
 axum = { version = "0.8.9", default-features = false, features = ["http1"] }
+# Checks that the patterns in the OpenAPI document match the request validators.
+regex = "1.13.1"
 tokio = { version = "1.53.1", features = ["test-util"] }
 
 [profile.release]

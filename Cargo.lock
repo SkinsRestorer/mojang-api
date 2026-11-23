@@ -921,6 +921,7 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "moka",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
