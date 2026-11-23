@@ -29,4 +29,7 @@ COPY --from=builder /app/target/release/mojang-api /usr/local/bin/mojang-api
 
 USER nonroot:nonroot
 EXPOSE 3000
+# The image has no shell or curl, so the binary checks its own /health endpoint.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD ["/usr/local/bin/mojang-api", "--health-check"]
 ENTRYPOINT ["/usr/local/bin/mojang-api"]

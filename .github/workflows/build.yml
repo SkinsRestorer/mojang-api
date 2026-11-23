@@ -69,3 +69,27 @@ jobs:
 
       - name: Check with the minimum supported Rust version
         run: cargo check --all-targets --locked
+
+  image:
+    # Renovate automerges base image updates, so build the image before they reach main.
+    name: Build container image
+    # The publish workflow builds the image on main.
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          cache-from: type=gha,scope=image-check
+          cache-to: type=gha,mode=max,scope=image-check

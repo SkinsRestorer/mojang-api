@@ -171,7 +171,7 @@ Container images without a shell or `curl` can run the binary itself as the heal
 mojang-api --health-check
 ```
 
-The command requests `/health` on `127.0.0.1` at the configured port. It exits with `0` when the response is `200`, and with `1` otherwise. It reads the same `PORT`, `SERVER_PORT`, and `.env` settings as the server. Use the path of the binary in the image, and set it as the health check command in Docker or Dokploy.
+The command requests `/health` on `127.0.0.1` at the configured port. It exits with `0` when the response is `200`, and with `1` otherwise. It reads the same `PORT`, `SERVER_PORT`, and `.env` settings as the server. The published image already runs it as its Docker `HEALTHCHECK` (`/usr/local/bin/mojang-api --health-check`), so Docker and Dokploy mark the container unhealthy when `/health` fails.
 
 ## Architecture
 
