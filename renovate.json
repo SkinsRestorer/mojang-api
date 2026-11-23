@@ -7,6 +7,11 @@
       "automergeType": "branch"
     },
     {
+      "description": "Automerged updates deploy to production, so wait until a compromised release is likely to be found and yanked. Pin and digest updates have no release timestamp and would never merge.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
       "description": "Only the publish workflow on main checks the Railpack checksums, so a passing branch build does not prove the update works. Keep it in its own pull request for manual review.",
       "matchPackageNames": ["railwayapp/railpack"],
       "groupName": null,
