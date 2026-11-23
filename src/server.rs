@@ -76,13 +76,13 @@ pub async fn serve(listener: TcpListener, router: Router, shutdown: impl Future<
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use axum::{Router, extract::ConnectInfo, routing::get};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
-        sync::oneshot,
+        sync::{Notify, oneshot},
     };
 
     use super::serve;
@@ -136,6 +136,83 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .expect("server should stop")
+            .expect("server task should not panic");
+    }
+
+    #[tokio::test]
+    async fn drains_in_flight_requests_and_closes_idle_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let router = Router::new().route("/", get(|| async { "idle" })).route(
+            "/slow",
+            get({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move || async move {
+                    started.notify_one();
+                    release.notified().await;
+                    "slow"
+                }
+            }),
+        );
+        let (stop, stopped) = oneshot::channel::<()>();
+        let task = tokio::spawn(serve(listener, router, async {
+            drop(stopped.await);
+        }));
+
+        // A keep-alive connection that has finished its request and now sits idle.
+        let mut idle = TcpStream::connect(address)
+            .await
+            .expect("idle client should connect");
+        idle.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .expect("idle request should be written");
+        let mut buffer = [0_u8; 1024];
+        let read = idle
+            .read(&mut buffer)
+            .await
+            .expect("idle response should be readable");
+        assert!(buffer[..read].starts_with(b"HTTP/1.1 200"), "{buffer:?}");
+
+        let mut slow = TcpStream::connect(address)
+            .await
+            .expect("slow client should connect");
+        slow.write_all(b"GET /slow HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .expect("slow request should be written");
+        started.notified().await;
+
+        stop.send(())
+            .expect("server should be waiting for shutdown");
+
+        // The idle connection closes without waiting for the in-flight request.
+        let read = tokio::time::timeout(Duration::from_secs(5), idle.read(&mut buffer))
+            .await
+            .expect("idle connection should close during the drain")
+            .expect("idle connection should close cleanly");
+        assert_eq!(read, 0, "idle connection should receive no more data");
+        assert!(
+            !task.is_finished(),
+            "server should wait for the in-flight request"
+        );
+
+        release.notify_one();
+        let mut response = String::new();
+        slow.read_to_string(&mut response)
+            .await
+            .expect("slow response should be readable");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("slow"), "{response}");
+
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("server should stop after the drain")
             .expect("server task should not panic");
     }
 }
