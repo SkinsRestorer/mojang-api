@@ -71,7 +71,7 @@ async fn run(
         Arc::clone(&metrics),
         BatchConfig::default(),
     );
-    let reporter = DiscordReporter::start(config.discord_webhook.clone(), Arc::clone(&metrics));
+    let reporter = DiscordReporter::start(config.discord_webhook, Arc::clone(&metrics));
     let app = build_router(
         AppState {
             batch_lookup: batch_processor.lookup(),
@@ -79,7 +79,7 @@ async fn run(
             mojang,
             metrics,
         },
-        config.trusted_proxies.clone(),
+        config.trusted_proxies,
     );
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.server_port)).await?;
     info!(

@@ -13,7 +13,9 @@ use thiserror::Error;
 
 const DEFAULT_SERVER_PORT: u16 = 3000;
 
-#[derive(Debug, Clone)]
+/// Application settings.
+///
+/// This type does not implement `Debug`, because the Discord webhook URL contains a secret token.
 pub struct Config {
     pub server_port: u16,
     pub proxy_list_file: Option<PathBuf>,
@@ -206,7 +208,9 @@ mod tests {
     #[test]
     fn names_the_invalid_port_variable() {
         for (name, value) in [("SERVER_PORT", "0"), ("PORT", "http"), ("PORT", "70000")] {
-            let error = load(&[(name, value)]).expect_err("port should be rejected");
+            let Err(error) = load(&[(name, value)]) else {
+                panic!("{name}={value:?} should be rejected");
+            };
             assert_eq!(
                 error.to_string(),
                 format!("{name} must be a TCP port from 1 to 65535, but it is {value:?}")
