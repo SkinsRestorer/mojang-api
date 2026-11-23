@@ -199,17 +199,21 @@ impl MojangHttpClient {
             .skip(start)
             .take(self.routes.len())
             .find(|route| route.cooldown(api).load(Ordering::Relaxed) <= now)
-            .ok_or_else(|| {
-                let available_at = self
-                    .routes
-                    .iter()
-                    .map(|route| route.cooldown(api).load(Ordering::Relaxed))
-                    .min()
-                    .unwrap_or(now);
-                UpstreamError::RateLimited {
-                    retry_after: Duration::from_millis(available_at.saturating_sub(now)),
-                }
-            })
+            .ok_or_else(|| self.rate_limited(api))
+    }
+
+    /// Reports how long until the first route becomes available for `api` again.
+    fn rate_limited(&self, api: Api) -> UpstreamError {
+        let now = self.now_millis();
+        let available_at = self
+            .routes
+            .iter()
+            .map(|route| route.cooldown(api).load(Ordering::Relaxed))
+            .min()
+            .unwrap_or(now);
+        UpstreamError::RateLimited {
+            retry_after: Duration::from_millis(available_at.saturating_sub(now)),
+        }
     }
 
     async fn request(
@@ -218,22 +222,18 @@ impl MojangHttpClient {
         sent_bytes: usize,
         build: impl Fn(&Client) -> RequestBuilder,
     ) -> Result<(StatusCode, Bytes), UpstreamError> {
-        let route = self.choose_route(api)?;
-        let mut result = self
-            .send(route, api, build(&route.client), sent_bytes)
-            .await;
-        for _ in 1..MAX_ATTEMPTS {
-            if !matches!(result, Err(UpstreamError::RateLimited { .. })) {
-                break;
-            }
-            let Ok(route) = self.choose_route(api) else {
-                break;
-            };
-            result = self
+        for _ in 0..MAX_ATTEMPTS {
+            let route = self.choose_route(api)?;
+            match self
                 .send(route, api, build(&route.client), sent_bytes)
-                .await;
+                .await
+            {
+                Err(UpstreamError::RateLimited { .. }) => {}
+                result => return result,
+            }
         }
-        result
+        // The last route's cooldown can outlast one that an earlier attempt rate-limited.
+        Err(self.rate_limited(api))
     }
 
     /// Sends a request and reads the body of successful responses.
@@ -474,9 +474,10 @@ fn parse_proxy_url(value: &str) -> Result<Url, ProxyParseError> {
 
     match (username, password) {
         (Some(username), Some(password)) if !username.is_empty() => {
-            url.set_username(username)
+            // `Url` leaves `%` unencoded, but reqwest percent-decodes proxy credentials.
+            url.set_username(&username.replace('%', "%25"))
                 .map_err(|()| ProxyParseError::Credentials)?;
-            url.set_password(Some(password))
+            url.set_password(Some(&password.replace('%', "%25")))
                 .map_err(|()| ProxyParseError::Credentials)?;
         }
         (None, None) => {}
@@ -526,6 +527,7 @@ mod tests {
         http::{StatusCode, header::RETRY_AFTER},
         response::{IntoResponse, Response},
         routing::{get, post},
+        serve::ListenerExt,
     };
     use bytes::BytesMut;
     use reqwest::Url;
@@ -579,31 +581,54 @@ mod tests {
         (StatusCode::TOO_MANY_REQUESTS, [(RETRY_AFTER, "120")]).into_response()
     }
 
-    async fn fixture(router: Router) -> MojangHttpClient {
+    fn rate_limiting_proxy(retry_after: &'static str) -> Router {
+        Router::new().route(
+            "/profile/{uuid}",
+            get(move || async move {
+                (StatusCode::TOO_MANY_REQUESTS, [(RETRY_AFTER, retry_after)])
+            }),
+        )
+    }
+
+    /// Serves `router` and returns its base URL and a count of accepted connections.
+    async fn serve(router: Router) -> (String, Arc<AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("fixture listener should bind");
         let address = listener
             .local_addr()
             .expect("fixture should have an address");
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&connections);
+        let listener = listener.tap_io(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
         tokio::spawn(async move {
             axum::serve(listener, router)
                 .await
                 .expect("fixture server should run");
         });
-        let base = format!("http://{address}");
+        (format!("http://{address}"), connections)
+    }
+
+    fn client(base: &str, proxies: &[Url]) -> MojangHttpClient {
         MojangHttpClient::build(
             MojangEndpoints {
                 batch_urls: vec![Url::parse(&format!("{base}/bulk")).expect("URL should parse")],
                 profile_base_url: Url::parse(&format!("{base}/profile/"))
                     .expect("URL should parse"),
             },
-            &[],
+            proxies,
             Duration::from_secs(5),
             Arc::new(Metrics::default()),
             false,
         )
         .expect("fixture client should build")
+    }
+
+    async fn fixture(router: Router) -> MojangHttpClient {
+        let (base, _) = serve(router).await;
+        client(&base, &[])
     }
 
     fn uuid(value: &str) -> Uuid {
@@ -687,6 +712,27 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 
+    #[tokio::test]
+    async fn reports_the_earliest_route_cooldown_after_retrying() {
+        let (short, short_connections) = serve(rate_limiting_proxy("30")).await;
+        let (long, long_connections) = serve(rate_limiting_proxy("120")).await;
+        let proxies = [short, long].map(|base| Url::parse(&base).expect("URL should parse"));
+        // Both routes are plain HTTP proxies, so the fixtures see the profile path.
+        let client = client("http://mojang.invalid", &proxies);
+
+        assert!(
+            matches!(
+                client.lookup_skin(uuid(PLAYER)).await,
+                Err(UpstreamError::RateLimited { retry_after })
+                    if retry_after > Duration::from_secs(25)
+                        && retry_after <= Duration::from_secs(30)
+            ),
+            "the shorter cooldown should decide when to retry"
+        );
+        assert_eq!(short_connections.load(Ordering::SeqCst), 1);
+        assert_eq!(long_connections.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn enforces_response_body_size_while_accumulating_chunks() {
         let mut body = BytesMut::new();
@@ -708,6 +754,11 @@ mod tests {
             authenticated.as_str(),
             "http://user:pass%3Aword@proxy.example:3128/"
         );
+
+        // Reqwest percent-decodes proxy credentials, so a literal `%` must stay encoded.
+        let percent = parse_proxy_url("proxy.example:3128:us%er:p%41ss").expect("should parse");
+        assert_eq!(percent.username(), "us%25er");
+        assert_eq!(percent.password(), Some("p%2541ss"));
     }
 
     #[test]
