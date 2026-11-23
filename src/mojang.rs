@@ -519,6 +519,7 @@ impl MojangService for MojangHttpClient {
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
         let Ok(_permit) = self.skin_lookups.try_acquire() else {
             warn!("rejecting skin lookup because too many are in progress");
+            self.metrics.increment_skin_lookup_rejections();
             return Err(UpstreamError::Overloaded);
         };
         let compact_uuid = uuid.simple().to_string();
@@ -882,6 +883,23 @@ mod tests {
             client.lookup_skin(uuid(UNSIGNED)).await,
             Err(UpstreamError::InvalidResponse)
         );
+    }
+
+    #[tokio::test]
+    async fn rejects_and_counts_skin_lookups_beyond_the_concurrency_limit() {
+        let client = client("http://127.0.0.1:9", &[]);
+        let _busy = client
+            .skin_lookups
+            .try_acquire_many(u32::try_from(super::MAX_CONCURRENT_SKIN_LOOKUPS).unwrap_or(u32::MAX))
+            .expect("the test should take every skin lookup permit");
+
+        assert_eq!(
+            client.lookup_skin(uuid(PLAYER)).await,
+            Err(UpstreamError::Overloaded)
+        );
+        let snapshot = client.metrics.snapshot();
+        assert_eq!(snapshot.skin_lookup_rejections, 1);
+        assert_eq!(snapshot.mojang_requests, 0);
     }
 
     #[tokio::test]

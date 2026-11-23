@@ -92,6 +92,7 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
         RATE_LIMIT,
         RATE_LIMIT_WINDOW,
         trusted_proxies,
+        Arc::clone(&state.metrics),
     ));
 
     let limited_routes = Router::new()
@@ -716,7 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limits_with_cors_headers_and_exempts_health() {
-        let (app, batch, _) = test_app();
+        let (app, batch, _, metrics) = test_app_with_metrics();
         let request = |path: &str| {
             Request::get(path)
                 .header(ORIGIN, "https://example.com")
@@ -776,6 +777,7 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(health.status(), StatusCode::OK);
+        assert_eq!(metrics.snapshot().rate_limited_requests, 1);
 
         batch.shutdown().await;
     }

@@ -20,6 +20,15 @@ use crate::{
 };
 
 const REPORT_INTERVAL: Duration = Duration::from_mins(5);
+/// Embed colors for the Mojang error rate of a report window.
+const HEALTHY_COLOR: u32 = 0x002e_cc71;
+const DEGRADED_COLOR: u32 = 0x00f3_9c12;
+const FAILING_COLOR: u32 = 0x00e7_4c3c;
+/// Error rates below this are healthy. Occasional transport errors and Mojang 429s stay
+/// green at high traffic.
+const DEGRADED_ERROR_RATE: f64 = 0.01;
+/// Error rates at or above this mean many lookups fail.
+const FAILING_ERROR_RATE: f64 = 0.10;
 
 pub struct DiscordReporter {
     shutdown: Option<oneshot::Sender<()>>,
@@ -174,14 +183,10 @@ fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_jso
     } else {
         total_requests as f64 / report_period.as_secs_f64() * 60.0
     };
-    let color = match snapshot
-        .mojang_errors
-        .saturating_add(snapshot.mojang_cooldown_rejections)
-    {
-        0 => 0x002e_cc71,
-        1..=10 => 0x00f3_9c12,
-        _ => 0x00e7_4c3c,
-    };
+    let error_rate = mojang_error_rate(snapshot);
+    let color = error_rate_color(error_rate);
+    let error_rate =
+        error_rate.map_or_else(|| "N/A".to_owned(), |rate| format!("{:.1}%", rate * 100.0));
     let rss = process_rss_bytes().map_or_else(|| "Unavailable".to_owned(), format_bytes);
     let load_average = load_average().unwrap_or_else(|| "Unavailable".to_owned());
     let report_period = format_report_period(report_period);
@@ -235,7 +240,7 @@ fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_jso
                 {
                     "name": format!("Mojang Backend ({report_period})"),
                     "value": format!(
-                        "**Requests:** {}\n**Errors:** {}\n**Rate-Limited Skips:** {}\n**Sent:** {}\n**Received:** {}",
+                        "**Requests:** {}\n**Errors:** {}\n**Rate-Limited Skips:** {}\n**Error Rate:** {error_rate}\n**Sent:** {}\n**Received:** {}",
                         format_number(snapshot.mojang_requests),
                         format_number(snapshot.mojang_errors),
                         format_number(snapshot.mojang_cooldown_rejections),
@@ -243,12 +248,54 @@ fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_jso
                         format_bytes(snapshot.bytes_received_from_mojang)
                     ),
                     "inline": true
+                },
+                {
+                    "name": format!("Rejected ({report_period})"),
+                    "value": format_rejections(snapshot),
+                    "inline": true
                 }
             ],
             "timestamp": format_utc_timestamp(SystemTime::now()),
             "footer": { "text": format!("SRMojangAPI v{}", env!("CARGO_PKG_VERSION")) }
         }]
     })
+}
+
+/// Returns the share of Mojang lookups that failed in the window, or `None` without lookups.
+///
+/// Failures are Mojang errors plus lookups skipped because every route was rate-limited.
+/// Lookups are Mojang requests plus those skips.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the error rate is rounded for display and compared with coarse thresholds"
+)]
+fn mojang_error_rate(snapshot: MetricsSnapshot) -> Option<f64> {
+    let lookups = snapshot
+        .mojang_requests
+        .saturating_add(snapshot.mojang_cooldown_rejections);
+    let failures = snapshot
+        .mojang_errors
+        .saturating_add(snapshot.mojang_cooldown_rejections)
+        .min(lookups);
+    (lookups > 0).then(|| failures as f64 / lookups as f64)
+}
+
+const fn error_rate_color(error_rate: Option<f64>) -> u32 {
+    match error_rate {
+        Some(rate) if rate >= FAILING_ERROR_RATE => FAILING_COLOR,
+        Some(rate) if rate >= DEGRADED_ERROR_RATE => DEGRADED_COLOR,
+        _ => HEALTHY_COLOR,
+    }
+}
+
+/// Summarizes work rejected because the service or a client was over its limits.
+fn format_rejections(snapshot: MetricsSnapshot) -> String {
+    format!(
+        "**Batch Queue Full:** {}\n**Skin Lookups Busy:** {}\n**Client Rate Limit:** {}",
+        format_number(snapshot.batch_queue_rejections),
+        format_number(snapshot.skin_lookup_rejections),
+        format_number(snapshot.rate_limited_requests)
+    )
 }
 
 #[expect(
@@ -260,8 +307,8 @@ fn format_bytes(bytes: u64) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
     match bytes {
         0..=1023 => format!("{bytes} B"),
-        1024..=1_048_575 => format!("{:.2} KB", bytes as f64 / KIB),
-        _ => format!("{:.2} MB", bytes as f64 / MIB),
+        1024..=1_048_575 => format!("{:.2} KiB", bytes as f64 / KIB),
+        _ => format!("{:.2} MiB", bytes as f64 / MIB),
     }
 }
 
@@ -285,8 +332,10 @@ fn format_duration(duration: Duration) -> String {
     parts.join(" ")
 }
 
+/// Rounds the report period to the nearest minute, so timer jitter past five minutes still
+/// reads as `5min`.
 fn format_report_period(duration: Duration) -> String {
-    let minutes = duration.as_secs().div_ceil(60);
+    let minutes = (duration.as_secs().saturating_add(30) / 60).max(1);
     format!("{minutes}min")
 }
 
@@ -385,8 +434,8 @@ mod tests {
     use tokio::{sync::mpsc, task::JoinHandle};
 
     use super::{
-        DiscordReporter, build_report, format_bytes, format_duration, format_number,
-        format_report_period, format_utc_timestamp,
+        DEGRADED_COLOR, DiscordReporter, FAILING_COLOR, HEALTHY_COLOR, build_report, format_bytes,
+        format_duration, format_number, format_report_period, format_utc_timestamp,
     };
     use crate::{
         http_client::http_client_builder,
@@ -410,8 +459,12 @@ mod tests {
             uuid_cache_misses: 1,
             batches_processed: 4,
             usernames_batched: 10,
+            mojang_requests: 49,
             mojang_errors: 2,
             mojang_cooldown_rejections: 1,
+            batch_queue_rejections: 1_234,
+            skin_lookup_rejections: 5,
+            rate_limited_requests: 6,
             ..MetricsSnapshot::default()
         };
 
@@ -425,22 +478,43 @@ mod tests {
         assert!(field_value(&report, "Batching (10min)").ends_with("**Avg Size:** 2.5"));
         assert!(
             field_value(&report, "Mojang Backend (10min)")
-                .contains("**Errors:** 2\n**Rate-Limited Skips:** 1\n")
+                .contains("**Errors:** 2\n**Rate-Limited Skips:** 1\n**Error Rate:** 6.0%\n")
         );
-        assert_eq!(report["embeds"][0]["color"], 0x00f3_9c12);
+        assert_eq!(
+            field_value(&report, "Rejected (10min)"),
+            "**Batch Queue Full:** 1,234\n**Skin Lookups Busy:** 5\n**Client Rate Limit:** 6"
+        );
+        assert_eq!(report["embeds"][0]["color"], DEGRADED_COLOR);
     }
 
     #[test]
-    fn flags_requests_skipped_while_mojang_rate_limits_every_route() {
-        let snapshot = MetricsSnapshot {
-            mojang_errors: 1,
-            mojang_cooldown_rejections: 500,
-            ..MetricsSnapshot::default()
-        };
+    fn colors_reports_by_mojang_error_rate() {
+        for (requests, errors, skips, color, rate) in [
+            // A few errors at high traffic stay healthy.
+            (100_000, 50, 0, HEALTHY_COLOR, "0.1%"),
+            (1_000, 10, 0, DEGRADED_COLOR, "1.0%"),
+            (1_000, 99, 0, DEGRADED_COLOR, "9.9%"),
+            (1_000, 100, 0, FAILING_COLOR, "10.0%"),
+            // Skips count as failed lookups even without any Mojang request.
+            (0, 0, 500, FAILING_COLOR, "100.0%"),
+            (1, 1, 500, FAILING_COLOR, "100.0%"),
+        ] {
+            let snapshot = MetricsSnapshot {
+                mojang_requests: requests,
+                mojang_errors: errors,
+                mojang_cooldown_rejections: skips,
+                ..MetricsSnapshot::default()
+            };
 
-        let report = build_report(snapshot, Duration::from_mins(5));
+            let report = build_report(snapshot, Duration::from_mins(5));
 
-        assert_eq!(report["embeds"][0]["color"], 0x00e7_4c3c);
+            assert_eq!(report["embeds"][0]["color"], color, "{snapshot:?}");
+            assert!(
+                field_value(&report, "Mojang Backend (5min)")
+                    .contains(&format!("**Error Rate:** {rate}\n")),
+                "{snapshot:?}"
+            );
+        }
     }
 
     #[test]
@@ -449,16 +523,19 @@ mod tests {
 
         assert!(field_value(&report, "Cache (5min)").contains("**Hit Rate:** N/A"));
         assert!(field_value(&report, "Batching (5min)").ends_with("**Avg Size:** N/A"));
-        assert_eq!(report["embeds"][0]["color"], 0x002e_cc71);
+        assert!(field_value(&report, "Mojang Backend (5min)").contains("**Error Rate:** N/A"));
+        assert_eq!(report["embeds"][0]["color"], HEALTHY_COLOR);
     }
 
     #[test]
     fn formats_report_values() {
         assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(1_536), "1.50 KB");
-        assert_eq!(format_bytes(1_572_864), "1.50 MB");
+        assert_eq!(format_bytes(1_536), "1.50 KiB");
+        assert_eq!(format_bytes(1_572_864), "1.50 MiB");
         assert_eq!(format_duration(Duration::from_secs(90_061)), "1d 1h 1m 1s");
-        assert_eq!(format_report_period(Duration::from_secs(301)), "6min");
+        assert_eq!(format_report_period(Duration::from_secs(301)), "5min");
+        assert_eq!(format_report_period(Duration::from_secs(330)), "6min");
+        assert_eq!(format_report_period(Duration::from_secs(10)), "1min");
         assert_eq!(format_number(1_234_567), "1,234,567");
     }
 

@@ -167,6 +167,8 @@ The HTTP server closes connections that do not send complete request headers wit
 
 Metrics remain cumulative in memory. A Discord report advances its reporting window only after Discord accepts it, so transport errors and non-successful HTTP responses do not discard counters.
 
+Each report shows the Mojang error rate of its window: Mojang errors plus lookups skipped because every route was rate-limited, divided by Mojang requests plus those skips. The report is green below 1%, orange from 1% to below 10%, and red at 10% or more. The report also counts rejected work: username lookups rejected because the batch queue was full, skin lookups rejected because 64 were already in progress, and client requests rejected by the rate limiter.
+
 On `SIGINT` or `SIGTERM`, the server stops accepting traffic and gives HTTP requests and queued batches up to 30 seconds each to drain. Work that exceeds either deadline is cancelled so shutdown cannot hang indefinitely. A second signal stops the service at once with a non-zero exit code.
 
 ## Contributing and support

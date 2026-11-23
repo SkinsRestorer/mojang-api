@@ -18,6 +18,9 @@ pub struct Metrics {
     mojang_requests: AtomicU64,
     mojang_errors: AtomicU64,
     mojang_cooldown_rejections: AtomicU64,
+    batch_queue_rejections: AtomicU64,
+    skin_lookup_rejections: AtomicU64,
+    rate_limited_requests: AtomicU64,
     started_at: Instant,
 }
 
@@ -37,6 +40,9 @@ impl Default for Metrics {
             mojang_requests: AtomicU64::new(0),
             mojang_errors: AtomicU64::new(0),
             mojang_cooldown_rejections: AtomicU64::new(0),
+            batch_queue_rejections: AtomicU64::new(0),
+            skin_lookup_rejections: AtomicU64::new(0),
+            rate_limited_requests: AtomicU64::new(0),
             started_at: Instant::now(),
         }
     }
@@ -94,6 +100,21 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Counts username lookups rejected because the batch queue was full.
+    pub fn increment_batch_queue_rejections(&self) {
+        self.batch_queue_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Counts skin lookups rejected because too many were already in progress.
+    pub fn increment_skin_lookup_rejections(&self) {
+        self.skin_lookup_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Counts client requests rejected by the rate limiter.
+    pub fn increment_rate_limited_requests(&self) {
+        self.rate_limited_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -110,6 +131,9 @@ impl Metrics {
             mojang_requests: self.mojang_requests.load(Ordering::Relaxed),
             mojang_errors: self.mojang_errors.load(Ordering::Relaxed),
             mojang_cooldown_rejections: self.mojang_cooldown_rejections.load(Ordering::Relaxed),
+            batch_queue_rejections: self.batch_queue_rejections.load(Ordering::Relaxed),
+            skin_lookup_rejections: self.skin_lookup_rejections.load(Ordering::Relaxed),
+            rate_limited_requests: self.rate_limited_requests.load(Ordering::Relaxed),
             uptime: self.started_at.elapsed(),
         }
     }
@@ -130,6 +154,9 @@ pub struct MetricsSnapshot {
     pub mojang_requests: u64,
     pub mojang_errors: u64,
     pub mojang_cooldown_rejections: u64,
+    pub batch_queue_rejections: u64,
+    pub skin_lookup_rejections: u64,
+    pub rate_limited_requests: u64,
     pub uptime: Duration,
 }
 
@@ -171,6 +198,15 @@ impl MetricsSnapshot {
             mojang_cooldown_rejections: self
                 .mojang_cooldown_rejections
                 .saturating_sub(previous.mojang_cooldown_rejections),
+            batch_queue_rejections: self
+                .batch_queue_rejections
+                .saturating_sub(previous.batch_queue_rejections),
+            skin_lookup_rejections: self
+                .skin_lookup_rejections
+                .saturating_sub(previous.skin_lookup_rejections),
+            rate_limited_requests: self
+                .rate_limited_requests
+                .saturating_sub(previous.rate_limited_requests),
             uptime: self.uptime,
         }
     }
@@ -188,6 +224,9 @@ mod tests {
         metrics.increment_uuid_cache_misses();
         metrics.record_mojang_request(12);
         metrics.record_mojang_response(34);
+        metrics.increment_batch_queue_rejections();
+        metrics.increment_skin_lookup_rejections();
+        metrics.increment_rate_limited_requests();
 
         let current = metrics.snapshot();
         let window = current.since(baseline);
@@ -197,6 +236,9 @@ mod tests {
         assert_eq!(window.mojang_requests, 1);
         assert_eq!(window.bytes_sent_to_mojang, 12);
         assert_eq!(window.bytes_received_from_mojang, 34);
+        assert_eq!(window.batch_queue_rejections, 1);
+        assert_eq!(window.skin_lookup_rejections, 1);
+        assert_eq!(window.rate_limited_requests, 1);
         assert_eq!(metrics.snapshot().uuid_requests, 1);
     }
 }

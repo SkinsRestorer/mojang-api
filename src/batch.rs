@@ -126,6 +126,7 @@ impl BatchLookup {
         name.make_ascii_lowercase();
         let request_name = name.clone();
         let sender = self.sender.clone();
+        let metrics = Arc::clone(&self.metrics);
         let result = self
             .cache
             .get_or_try_insert_uuid(name, async move {
@@ -138,6 +139,7 @@ impl BatchLookup {
                     .map_err(|error| match error {
                         TrySendError::Full(_) => {
                             warn!("rejecting Mojang lookup because the batch queue is full");
+                            metrics.increment_batch_queue_rejections();
                             UpstreamError::Overloaded
                         }
                         TrySendError::Closed(_) => {
@@ -787,10 +789,11 @@ mod tests {
     #[tokio::test]
     async fn rejects_lookups_when_the_queue_is_full() {
         let service = Arc::new(BlockingMojangService::default());
+        let metrics = Arc::new(Metrics::default());
         let processor = BatchProcessor::start(
             Arc::<BlockingMojangService>::clone(&service),
             CacheManager::default(),
-            Arc::new(Metrics::default()),
+            Arc::clone(&metrics),
             BatchConfig::new(1, Duration::from_secs(30), 1, 1)
                 .expect("test batch configuration should be valid"),
         );
@@ -824,6 +827,7 @@ mod tests {
             lookup.lookup("Fourth".to_owned()).await,
             Err(UpstreamError::Overloaded)
         );
+        assert_eq!(metrics.snapshot().batch_queue_rejections, 1);
 
         service.release.add_permits(3);
         for receiver in [running, waiting, queued] {

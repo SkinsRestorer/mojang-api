@@ -18,6 +18,7 @@ use ipnet::IpNet;
 
 use crate::{
     error::ceil_seconds,
+    metrics::Metrics,
     types::{ErrorResponse, ErrorType},
 };
 
@@ -47,6 +48,7 @@ pub struct RateLimiter {
     shards: Box<[Mutex<RateLimiterState>]>,
     limit_header: HeaderValue,
     policy_header: HeaderValue,
+    metrics: Arc<Metrics>,
 }
 
 #[derive(Debug)]
@@ -67,13 +69,19 @@ impl RateLimiter {
     /// Creates an in-memory rate limiter that allows `limit` requests per `window`.
     ///
     /// `trusted_proxies` lists the peers whose `CF-Connecting-IP` header identifies the client.
-    /// Requests from other peers are limited by the peer address.
+    /// Requests from other peers are limited by the peer address. Rejected requests are
+    /// counted in `metrics`.
     ///
     /// # Panics
     ///
     /// Never in practice: the policy header contains only digits, `;`, and `w=`.
     #[must_use]
-    pub fn new(limit: NonZeroU32, window: Duration, trusted_proxies: Vec<IpNet>) -> Self {
+    pub fn new(
+        limit: NonZeroU32,
+        window: Duration,
+        trusted_proxies: Vec<IpNet>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         let emission_interval = (window / limit.get()).max(Duration::from_nanos(1));
         let now = Instant::now();
         Self {
@@ -99,6 +107,7 @@ impl RateLimiter {
             )]
             policy_header: HeaderValue::try_from(format!("{limit};w={}", window.as_secs()))
                 .expect("the rate limit policy is a valid header value"),
+            metrics,
         }
     }
 
@@ -206,6 +215,7 @@ pub async fn enforce_rate_limit(
     let mut response = if decision.allowed {
         next.run(request).await
     } else {
+        rate_limiter.metrics.increment_rate_limited_requests();
         (
             StatusCode::TOO_MANY_REQUESTS,
             Json(ErrorResponse {
@@ -236,6 +246,7 @@ mod tests {
     use std::{
         net::{IpAddr, Ipv4Addr},
         num::NonZeroU32,
+        sync::Arc,
         time::{Duration, Instant},
     };
 
@@ -248,6 +259,7 @@ mod tests {
             NonZeroU32::new(limit).expect("test limit should not be zero"),
             window,
             vec!["10.0.0.0/8".parse().expect("test network should parse")],
+            Arc::default(),
         )
     }
 
