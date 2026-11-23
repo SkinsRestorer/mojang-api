@@ -47,10 +47,15 @@ fn start() -> Result<(), BoxError> {
         config.proxy_list_file.as_deref(),
         Arc::clone(&metrics),
     )?);
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(run(config, metrics, cache, mojang))
+        .build()?;
+    let result = runtime.block_on(run(config, metrics, cache, mojang));
+    // Dropping the runtime would wait for running blocking tasks, such as DNS lookups.
+    // Graceful shutdown has already awaited all required work, and a forced exit must
+    // not wait at all.
+    runtime.shutdown_background();
+    result
 }
 
 async fn run(
@@ -103,8 +108,11 @@ async fn run(
 fn listen_for_signals() -> watch::Receiver<u32> {
     let (sender, receiver) = watch::channel(0_u32);
     tokio::spawn(async move {
+        // Install the handlers once. Signals that arrive while no handler is
+        // subscribed would otherwise be lost.
+        let mut signals = ShutdownSignals::install();
         loop {
-            shutdown_signal().await;
+            signals.recv().await;
             sender.send_modify(|count| *count = count.saturating_add(1));
             info!("shutdown signal received");
         }
@@ -135,32 +143,59 @@ fn initialize_tracing() -> Result<bool, BoxError> {
     Ok(invalid)
 }
 
-async fn shutdown_signal() {
-    let ctrl_c = async {
+#[cfg(unix)]
+struct ShutdownSignals {
+    interrupt: Option<signal::unix::Signal>,
+    terminate: Option<signal::unix::Signal>,
+}
+
+#[cfg(unix)]
+impl ShutdownSignals {
+    fn install() -> Self {
+        use signal::unix::{SignalKind, signal};
+
+        let install = |kind, name| {
+            signal(kind)
+                .inspect_err(|error| error!(%error, "could not install {name} signal handler"))
+                .ok()
+        };
+        Self {
+            interrupt: install(SignalKind::interrupt(), "SIGINT"),
+            terminate: install(SignalKind::terminate(), "SIGTERM"),
+        }
+    }
+
+    async fn recv(&mut self) {
+        async fn next(signal: Option<&mut signal::unix::Signal>) {
+            if let Some(signal) = signal
+                && signal.recv().await.is_some()
+            {
+                return;
+            }
+            // A missing handler or a stopped signal driver never resolves.
+            std::future::pending::<()>().await;
+        }
+
+        tokio::select! {
+            () = next(self.interrupt.as_mut()) => {}
+            () = next(self.terminate.as_mut()) => {}
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct ShutdownSignals;
+
+#[cfg(not(unix))]
+impl ShutdownSignals {
+    fn install() -> Self {
+        Self
+    }
+
+    async fn recv(&mut self) {
         if let Err(error) = signal::ctrl_c().await {
             error!(%error, "could not install Ctrl+C signal handler");
             std::future::pending::<()>().await;
         }
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(error) => {
-                error!(%error, "could not install SIGTERM signal handler");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
     }
 }
