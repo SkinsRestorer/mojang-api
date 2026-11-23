@@ -21,7 +21,7 @@ use crate::{
 
 const BATCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Mojang's bulk profile endpoints accept at most 10 names per request.
-pub const MAX_BATCH_SIZE: usize = 10;
+const MAX_BATCH_SIZE: usize = 10;
 /// Bounds how long a request waits for its batch, including time spent queued.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(25);
 
