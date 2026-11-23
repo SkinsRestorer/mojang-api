@@ -358,9 +358,9 @@ impl MojangHttpClient {
             Some(_) => Err(self.rate_limited(upstreams)),
             None => {
                 // Failed attempts already counted as errors.
+                static ALL_ROUTES_COOLING_DOWN: LogThrottle = LogThrottle::new(LOG_INTERVAL);
                 self.metrics.increment_mojang_cooldown_rejections();
                 let error = self.rate_limited(upstreams);
-                static ALL_ROUTES_COOLING_DOWN: LogThrottle = LogThrottle::new(LOG_INTERVAL);
                 if let Some(suppressed) = ALL_ROUTES_COOLING_DOWN.check() {
                     warn!(
                         ?upstreams,
@@ -551,8 +551,8 @@ impl MojangService for MojangHttpClient {
 
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
         let Ok(_permit) = self.skin_lookups.try_acquire() else {
-            self.metrics.increment_skin_lookup_rejections();
             static TOO_MANY_SKIN_LOOKUPS: LogThrottle = LogThrottle::new(LOG_INTERVAL);
+            self.metrics.increment_skin_lookup_rejections();
             if let Some(suppressed) = TOO_MANY_SKIN_LOOKUPS.check() {
                 warn!(
                     suppressed,

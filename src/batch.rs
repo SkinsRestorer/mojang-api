@@ -217,8 +217,8 @@ impl BatchLookup {
                     })
                     .map_err(|error| match error {
                         TrySendError::Full(_) => {
-                            metrics.increment_batch_queue_rejections();
                             static QUEUE_FULL: LogThrottle = LogThrottle::new(LOG_INTERVAL);
+                            metrics.increment_batch_queue_rejections();
                             if let Some(suppressed) = QUEUE_FULL.check() {
                                 warn!(
                                     suppressed,

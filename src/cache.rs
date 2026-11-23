@@ -12,7 +12,9 @@ pub(crate) const POSITIVE_NAME_TTL: Duration = Duration::from_hours(6);
 /// Players can change skins at any time, so skins expire sooner than names.
 pub(crate) const POSITIVE_SKIN_TTL: Duration = Duration::from_hours(1);
 pub(crate) const NEGATIVE_CACHE_TTL: Duration = Duration::from_mins(15);
-const SKIN_ENTRY_OVERHEAD_BYTES: usize = 128;
+/// Measured per-entry overhead of a skin entry (moka bookkeeping, key, `Arc`, and allocation
+/// headers), so the skin cache's byte limit matches its real memory use.
+const SKIN_ENTRY_OVERHEAD_BYTES: usize = 340;
 
 /// Caches name-to-UUID and UUID-to-skin lookups.
 ///
