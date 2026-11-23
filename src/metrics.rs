@@ -17,6 +17,7 @@ pub struct Metrics {
     bytes_received_from_mojang: AtomicU64,
     mojang_requests: AtomicU64,
     mojang_errors: AtomicU64,
+    mojang_cooldown_rejections: AtomicU64,
     started_at: Instant,
 }
 
@@ -35,6 +36,7 @@ impl Default for Metrics {
             bytes_received_from_mojang: AtomicU64::new(0),
             mojang_requests: AtomicU64::new(0),
             mojang_errors: AtomicU64::new(0),
+            mojang_cooldown_rejections: AtomicU64::new(0),
             started_at: Instant::now(),
         }
     }
@@ -86,6 +88,12 @@ impl Metrics {
         self.mojang_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Counts Mojang lookups rejected without a request because every route was cooling down.
+    pub fn increment_mojang_cooldown_rejections(&self) {
+        self.mojang_cooldown_rejections
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -101,6 +109,7 @@ impl Metrics {
             bytes_received_from_mojang: self.bytes_received_from_mojang.load(Ordering::Relaxed),
             mojang_requests: self.mojang_requests.load(Ordering::Relaxed),
             mojang_errors: self.mojang_errors.load(Ordering::Relaxed),
+            mojang_cooldown_rejections: self.mojang_cooldown_rejections.load(Ordering::Relaxed),
             uptime: self.started_at.elapsed(),
         }
     }
@@ -120,6 +129,7 @@ pub struct MetricsSnapshot {
     pub bytes_received_from_mojang: u64,
     pub mojang_requests: u64,
     pub mojang_errors: u64,
+    pub mojang_cooldown_rejections: u64,
     pub uptime: Duration,
 }
 
@@ -158,6 +168,9 @@ impl MetricsSnapshot {
                 .mojang_requests
                 .saturating_sub(previous.mojang_requests),
             mojang_errors: self.mojang_errors.saturating_sub(previous.mojang_errors),
+            mojang_cooldown_rejections: self
+                .mojang_cooldown_rejections
+                .saturating_sub(previous.mojang_cooldown_rejections),
             uptime: self.uptime,
         }
     }

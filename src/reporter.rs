@@ -174,7 +174,10 @@ fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_jso
     } else {
         total_requests as f64 / report_period.as_secs_f64() * 60.0
     };
-    let color = match snapshot.mojang_errors {
+    let color = match snapshot
+        .mojang_errors
+        .saturating_add(snapshot.mojang_cooldown_rejections)
+    {
         0 => 0x002e_cc71,
         1..=10 => 0x00f3_9c12,
         _ => 0x00e7_4c3c,
@@ -232,9 +235,10 @@ fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_jso
                 {
                     "name": format!("Mojang Backend ({report_period})"),
                     "value": format!(
-                        "**Requests:** {}\n**Errors:** {}\n**Sent:** {}\n**Received:** {}",
+                        "**Requests:** {}\n**Errors:** {}\n**Rate-Limited Skips:** {}\n**Sent:** {}\n**Received:** {}",
                         format_number(snapshot.mojang_requests),
                         format_number(snapshot.mojang_errors),
+                        format_number(snapshot.mojang_cooldown_rejections),
                         format_bytes(snapshot.bytes_sent_to_mojang),
                         format_bytes(snapshot.bytes_received_from_mojang)
                     ),
@@ -407,6 +411,7 @@ mod tests {
             batches_processed: 4,
             usernames_batched: 10,
             mojang_errors: 2,
+            mojang_cooldown_rejections: 1,
             ..MetricsSnapshot::default()
         };
 
@@ -418,7 +423,24 @@ mod tests {
         );
         assert!(field_value(&report, "Cache (10min)").contains("**Hit Rate:** 75.0%"));
         assert!(field_value(&report, "Batching (10min)").ends_with("**Avg Size:** 2.5"));
+        assert!(
+            field_value(&report, "Mojang Backend (10min)")
+                .contains("**Errors:** 2\n**Rate-Limited Skips:** 1\n")
+        );
         assert_eq!(report["embeds"][0]["color"], 0x00f3_9c12);
+    }
+
+    #[test]
+    fn flags_requests_skipped_while_mojang_rate_limits_every_route() {
+        let snapshot = MetricsSnapshot {
+            mojang_errors: 1,
+            mojang_cooldown_rejections: 500,
+            ..MetricsSnapshot::default()
+        };
+
+        let report = build_report(snapshot, Duration::from_mins(5));
+
+        assert_eq!(report["embeds"][0]["color"], 0x00e7_4c3c);
     }
 
     #[test]

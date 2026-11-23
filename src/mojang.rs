@@ -221,8 +221,13 @@ impl MojangHttpClient {
         sent_bytes: usize,
         build: impl Fn(&Client) -> RequestBuilder,
     ) -> Result<(StatusCode, Bytes), UpstreamError> {
-        for _ in 0..MAX_ATTEMPTS {
-            let route = self.choose_route(api)?;
+        for attempt in 0..MAX_ATTEMPTS {
+            let route = self.choose_route(api).inspect_err(|_| {
+                // A retry follows a 429 that already counted as an error.
+                if attempt == 0 {
+                    self.metrics.increment_mojang_cooldown_rejections();
+                }
+            })?;
             match self
                 .send(route, api, build(&route.client), sent_bytes)
                 .await
@@ -737,6 +742,9 @@ mod tests {
             "the cooldown should short-circuit later requests"
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let snapshot = client.metrics.snapshot();
+        assert_eq!(snapshot.mojang_errors, 1);
+        assert_eq!(snapshot.mojang_cooldown_rejections, 1);
     }
 
     #[tokio::test]
