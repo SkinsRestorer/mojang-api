@@ -15,6 +15,10 @@ use crate::error::ErrorChain;
 /// Closes connections that do not send complete request headers in time, including idle
 /// keep-alive connections.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// Caps the bytes buffered for each request head. Hyper's default of about 400 KiB would let
+/// [`MAX_CONNECTIONS`] slow clients hold over 1.5 GiB. This still exceeds the 32 KiB of
+/// request headers that Cloudflare forwards.
+const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 const MAX_CONNECTIONS: usize = 4_096;
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,7 +30,8 @@ pub async fn serve(listener: TcpListener, router: Router, shutdown: impl Future<
     let mut builder = http1::Builder::new();
     builder
         .timer(TokioTimer::new())
-        .header_read_timeout(HEADER_READ_TIMEOUT);
+        .header_read_timeout(HEADER_READ_TIMEOUT)
+        .max_buf_size(MAX_REQUEST_HEAD_BYTES);
     let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let graceful = GracefulShutdown::new();
     tokio::pin!(shutdown);
@@ -85,7 +90,9 @@ mod tests {
         sync::{Notify, oneshot},
     };
 
-    use super::serve;
+    use super::{MAX_REQUEST_HEAD_BYTES, serve};
+
+    const LARGE_BODY_BYTES: usize = 4 * MAX_REQUEST_HEAD_BYTES;
 
     async fn start() -> (
         std::net::SocketAddr,
@@ -98,14 +105,16 @@ mod tests {
         let address = listener
             .local_addr()
             .expect("listener should have an address");
-        let router = Router::new().route(
-            "/",
-            get(
-                |ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>| async move {
-                    peer.ip().to_string()
-                },
-            ),
-        );
+        let router = Router::new()
+            .route(
+                "/",
+                get(
+                    |ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>| async move {
+                        peer.ip().to_string()
+                    },
+                ),
+            )
+            .route("/large", get(|| async { "x".repeat(LARGE_BODY_BYTES) }));
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(serve(listener, router, async {
             drop(stopped.await);
@@ -213,6 +222,52 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .expect("server should stop after the drain")
+            .expect("server task should not panic");
+    }
+
+    async fn send(address: std::net::SocketAddr, request: &[u8]) -> String {
+        let mut stream = TcpStream::connect(address)
+            .await
+            .expect("test client should connect");
+        stream
+            .write_all(request)
+            .await
+            .expect("request should be written");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .expect("response should be readable");
+        String::from_utf8(response).expect("response should be UTF-8")
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_request_heads_but_sends_large_responses() {
+        let (address, stop, task) = start().await;
+        // Hyper checks the limit between reads, so it may accept a head slightly over it.
+        let padding = "a".repeat(2 * MAX_REQUEST_HEAD_BYTES);
+        let oversized = format!(
+            "GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\nX-Padding: {padding}\r\n\r\n"
+        );
+        let response = send(address, oversized.as_bytes()).await;
+        assert!(response.starts_with("HTTP/1.1 431"), "{response}");
+
+        let response = send(
+            address,
+            b"GET /large HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response:.100}");
+        assert!(
+            response.ends_with(&"x".repeat(LARGE_BODY_BYTES)),
+            "the whole response body should arrive"
+        );
+
+        stop.send(())
+            .expect("server should be waiting for shutdown");
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("server should stop")
             .expect("server task should not panic");
     }
 }
