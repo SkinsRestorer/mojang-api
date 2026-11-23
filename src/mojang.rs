@@ -469,6 +469,11 @@ fn parse_proxy_url(value: &str) -> Result<Url, ProxyParseError> {
     let password = parts.next();
 
     let (host, port) = host.zip(port).ok_or(ProxyParseError::Format)?;
+    // URL delimiters would move the port into a path or the host into credentials, so
+    // `host/x:8080` would otherwise connect to port 80.
+    if host.contains(['/', '\\', '?', '#', '@']) {
+        return Err(ProxyParseError::Format);
+    }
     let port: u16 = port.parse().map_err(ProxyParseError::Port)?;
     let mut url = Url::parse(&format!("http://{host}:{port}")).map_err(ProxyParseError::Url)?;
 
@@ -776,5 +781,18 @@ mod tests {
             parse_proxy_url("127.0.0.1:8080:user"),
             Err(ProxyParseError::Format)
         );
+        for entry in [
+            "proxy.example/path:8080",
+            "proxy.example\\path:8080",
+            "proxy.example?x:8080",
+            "proxy.example#x:8080",
+            "user@proxy.example:8080",
+        ] {
+            assert_eq!(
+                parse_proxy_url(entry),
+                Err(ProxyParseError::Format),
+                "{entry} should be rejected"
+            );
+        }
     }
 }
