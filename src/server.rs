@@ -39,10 +39,8 @@ pub async fn serve(listener: TcpListener, router: Router, shutdown: impl Future<
     loop {
         let permit = tokio::select! {
             () = &mut shutdown => break,
-            permit = Arc::clone(&connections).acquire_owned() => match permit {
-                Ok(permit) => permit,
-                Err(_) => break,
-            },
+            // The semaphore is never closed, so `acquire_owned` always succeeds.
+            Ok(permit) = Arc::clone(&connections).acquire_owned() => permit,
         };
         let (stream, peer) = tokio::select! {
             () = &mut shutdown => break,
