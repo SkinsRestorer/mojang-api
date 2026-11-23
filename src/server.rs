@@ -90,7 +90,7 @@ mod tests {
         sync::{Notify, oneshot},
     };
 
-    use super::{MAX_REQUEST_HEAD_BYTES, serve};
+    use super::{HEADER_READ_TIMEOUT, MAX_REQUEST_HEAD_BYTES, serve};
 
     const LARGE_BODY_BYTES: usize = 4 * MAX_REQUEST_HEAD_BYTES;
 
@@ -226,6 +226,55 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .expect("server should stop after the drain")
+            .expect("server task should not panic");
+    }
+
+    /// Reads until the server closes the connection and returns how long that took.
+    async fn time_until_closed(stream: &mut TcpStream) -> Duration {
+        let started = tokio::time::Instant::now();
+        let mut rest = Vec::new();
+        stream
+            .read_to_end(&mut rest)
+            .await
+            .expect("connection should close cleanly");
+        assert!(rest.is_empty(), "{:?}", String::from_utf8_lossy(&rest));
+        started.elapsed()
+    }
+
+    // The paused clock skips ahead whenever the runtime waits, so the timeout takes no real time.
+    #[tokio::test(start_paused = true)]
+    async fn closes_slow_and_idle_connections_after_the_header_read_timeout() {
+        let (address, stop, task) = start().await;
+
+        let mut slow = TcpStream::connect(address)
+            .await
+            .expect("slow client should connect");
+        slow.write_all(b"GET / HTTP/1.1\r\nHost: te")
+            .await
+            .expect("partial request should be written");
+        let elapsed = time_until_closed(&mut slow).await;
+        assert!(elapsed >= HEADER_READ_TIMEOUT, "closed after {elapsed:?}");
+
+        let mut idle = TcpStream::connect(address)
+            .await
+            .expect("idle client should connect");
+        idle.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .expect("request should be written");
+        let mut buffer = [0_u8; 1024];
+        let read = idle
+            .read(&mut buffer)
+            .await
+            .expect("response should be readable");
+        assert!(buffer[..read].starts_with(b"HTTP/1.1 200"), "{buffer:?}");
+        let elapsed = time_until_closed(&mut idle).await;
+        assert!(elapsed >= HEADER_READ_TIMEOUT, "closed after {elapsed:?}");
+
+        stop.send(())
+            .expect("server should be waiting for shutdown");
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("server should stop")
             .expect("server task should not panic");
     }
 
