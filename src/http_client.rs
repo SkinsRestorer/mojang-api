@@ -7,10 +7,11 @@ pub(crate) fn http_client_builder(request_timeout: Duration) -> ClientBuilder {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "This shared builder sets the connection and request timeouts for all clients."
+        reason = "This shared builder sets the timeouts and User-Agent for all clients."
     )]
     let builder = Client::builder();
     builder
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(request_timeout)
+        .user_agent("SRMojangAPI")
 }

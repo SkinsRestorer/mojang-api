@@ -1,3 +1,5 @@
+use std::fmt;
+
 use axum::{
     Json,
     http::StatusCode,
@@ -37,5 +39,20 @@ impl IntoResponse for AppError {
             Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, ErrorType::InternalError),
         };
         (status, Json(ErrorResponse { error })).into_response()
+    }
+}
+
+/// Displays an error followed by each of its sources, separated by `: `.
+pub struct ErrorChain<'a>(pub &'a (dyn std::error::Error + 'static));
+
+impl fmt::Display for ErrorChain<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)?;
+        let mut source = self.0.source();
+        while let Some(error) = source {
+            write!(formatter, ": {error}")?;
+            source = error.source();
+        }
+        Ok(())
     }
 }

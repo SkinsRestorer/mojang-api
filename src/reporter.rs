@@ -14,6 +14,7 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
+    error::ErrorChain,
     http_client::http_client_builder,
     metrics::{Metrics, MetricsSnapshot},
 };
@@ -73,13 +74,21 @@ impl DiscordReporter {
                                 continue;
                             }
                         };
-                        match send_report(&client, &webhook, &payload).await {
+                        // Shutdown must not wait for a slow Discord request.
+                        let result = tokio::select! {
+                            biased;
+                            _ = &mut shutdown_receiver => break,
+                            result = send_report(&client, &webhook, &payload) => result,
+                        };
+                        match result {
                             Ok(()) => {
                                 last_successful_snapshot = current_snapshot;
                                 last_successful_report_at = now;
                             }
                             Err(error) => {
-                                error!(%error, "failed to send Discord status report");
+                                // The webhook URL contains its secret token, so never log it.
+                                let error = error.without_url();
+                                error!(error = %ErrorChain(&error), "failed to send Discord status report");
                             }
                         }
                     },
