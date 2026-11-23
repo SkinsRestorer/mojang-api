@@ -60,7 +60,9 @@ pub fn router<S: Clone + Send + Sync + 'static>(openapi: OpenApi) -> Router<S> {
 fn swagger_asset(file: &str, config: Arc<Config<'static>>) -> Response {
     match utoipa_swagger_ui::serve(file, config) {
         Ok(Some(asset)) => {
-            let mut response = asset.bytes.into_owned().into_response();
+            // Serves embedded files without copying them. Copying the 1.4 MB bundle for each
+            // request would let clients that read slowly hold gigabytes of memory.
+            let mut response = asset.bytes.into_response();
             if let Ok(content_type) = HeaderValue::from_str(&asset.content_type) {
                 response.headers_mut().insert(CONTENT_TYPE, content_type);
             }
@@ -71,5 +73,46 @@ fn swagger_asset(file: &str, config: Arc<Config<'static>>) -> Response {
             error!(%error, file, "could not serve Swagger UI asset");
             AppError::Internal.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    use utoipa::openapi::OpenApi;
+
+    use super::router;
+
+    #[tokio::test]
+    async fn serves_embedded_assets_without_copying_them() {
+        let app = router::<()>(OpenApi::default());
+        let mut bodies = Vec::new();
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get("/swagger/swagger-ui-bundle.js")
+                        .body(Body::empty())
+                        .expect("request should build"),
+                )
+                .await
+                .expect("request should succeed");
+            assert_eq!(response.status(), StatusCode::OK);
+            bodies.push(
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body should be readable"),
+            );
+        }
+        assert!(bodies[0].len() > 1024 * 1024, "{}", bodies[0].len());
+        assert_eq!(
+            bodies[0].as_ptr(),
+            bodies[1].as_ptr(),
+            "each response should share the embedded bytes instead of a new copy"
+        );
     }
 }
