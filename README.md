@@ -21,7 +21,7 @@ curl http://localhost:3000/mojang/uuid/Pistonmaster
 
 ## Configuration
 
-The service reads `.env` during local development and uses normal environment variables in production. A variable set to an empty value counts as unset. The service stops at startup and names the variable when a value is invalid.
+The service reads environment variables and loads a `.env` file from the working directory when one exists. Variables that are already set take precedence over `.env`. A variable set to an empty value counts as unset. When a value is invalid, the service stops at startup and names the variable. An invalid `RUST_LOG` is the exception: the service logs a warning and uses `info`.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -92,13 +92,13 @@ Missing profiles or texture properties return `200 OK` with `exists` set to `fal
 
 - `GET /health` returns `200` with `{"status":"UP"}`, or `503` with `{"status":"DOWN"}` when username lookups have stopped.
 - `GET /openapi` returns the generated OpenAPI document.
-- `GET /swagger` opens Swagger UI.
+- `GET /swagger` opens Swagger UI. `GET /` redirects to it.
 
 Lookup responses for existing profiles include `Cache-Control: public, max-age=900`. Responses with `exists` set to `false` include `Cache-Control: public, max-age=60`.
 
 ### Errors
 
-Every error response has a JSON body such as `{"error":"INVALID_NAME"}`.
+Error responses have a JSON body such as `{"error":"INVALID_NAME"}`. The exception is a request that runs longer than 30 seconds: it gets `503` with an empty body.
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ Every error response has a JSON body such as `{"error":"INVALID_NAME"}`.
 
 Railpack detects the Rust project from `Cargo.toml`, installs its system dependencies, uses the version pinned in `rust-toolchain.toml`, builds the release binary, and starts `./bin/mojang-api`. No custom Railpack configuration or start command is required.
 
-Set any production configuration variables in the deployment environment. The application reads the platform-provided `PORT` variable directly while retaining `SERVER_PORT` as a compatibility override.
+Set production configuration variables in the deployment environment.
 
 ## Run the published image
 
@@ -152,7 +152,7 @@ cargo build --release --locked
 
 ## Architecture
 
-Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and flushes batches when ten distinct requests are queued or after three seconds. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
+Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and sends a batch when ten requests are queued, and sends any smaller batch every three seconds. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
 
 A username lookup fails with `503` when the batch queue is full or when its batch does not finish within 25 seconds.
 

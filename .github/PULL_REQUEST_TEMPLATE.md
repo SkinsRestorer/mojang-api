@@ -4,7 +4,7 @@
 
 ## Scope
 
-<!-- Describe API, configuration, or event behavior changes. State whether a live upstream or Discord check was required. -->
+<!-- Describe API, configuration, or Discord report changes. State whether a live upstream or Discord check was required. -->
 
 ## Validation
 
@@ -12,10 +12,10 @@
 
 ## Compatibility
 
-<!-- Describe changed APIs, configuration, permissions, generated files, or migration requirements. Write "None" when there are none. -->
+<!-- Describe changed APIs, configuration, permissions, or migration requirements. Write "None" when there are none. -->
 
 ## Checklist
 
 - [ ] I followed CONTRIBUTING.md and kept the change focused.
 - [ ] I added relevant tests and updated documentation, or explained why neither is needed.
-- [ ] I reviewed generated changes and removed secrets and private data.
+- [ ] I removed secrets and private data.

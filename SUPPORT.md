@@ -4,7 +4,6 @@ Read the [README](README.md) and [contribution guide](CONTRIBUTING.md) for setup
 For usage questions, use [SkinsRestorer Discord](https://skinsrestorer.net/discord).
 
 For a reproducible defect or feature request, use [the issue tracker](https://github.com/SkinsRestorer/mojang-api/issues).
-Name the repository and affected version in reports sent to a shared tracker.
 Search existing reports before opening another issue. Add new evidence to an existing report when it covers the same problem.
 
 ## Details that help

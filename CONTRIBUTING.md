@@ -13,18 +13,12 @@ Keep each change focused. Avoid unrelated formatting and dependency updates.
 
 ## Prepare a checkout
 
-Install Rust through Rustup. Use `rust-toolchain.toml` when present, otherwise the minimum version in `Cargo.toml`. The lockfile pins dependencies.
+Install Rust through Rustup. It installs the version pinned in `rust-toolchain.toml`. CI also checks that the code compiles with the minimum version in `Cargo.toml`. The lockfile pins dependencies.
 
 Install [Lefthook](https://lefthook.dev/install/) 1.13.6 or newer, then run `lefthook install` once per checkout.
-The pre-commit hook checks staged whitespace and Rust formatting. Before pushing Rust or dependency changes, Clippy checks all targets and features and the tests run.
+The pre-commit hook checks staged whitespace and Rust formatting. When Rust, Cargo, or toolchain files change, the pre-push hook runs Clippy and the tests.
 Install cargo-deny 0.20.2 for the pre-push hook. It runs `cargo deny --locked check` when `Cargo.toml`, `Cargo.lock`, or `deny.toml` changes.
 The pre-push hook compares `HEAD` with the branch's upstream. Keep the upstream set to the branch that you push.
-
-Run the commands below from the repository root unless a command names another directory.
-
-## Repository layout
-
-- `src/`: HTTP routes, cache, request batches, rate limits, and proxy behavior.
 
 ## Verify your change
 
@@ -38,7 +32,6 @@ Cover cache expiry, batching, rate limits, and invalid names/UUIDs with focused 
 
 Run the relevant checks before review. State the command and result in the pull request.
 If a check cannot run, explain the missing dependency or service. Do not claim it passed.
-Keep generated artifacts consistent with their source and review their diff.
 
 ## Style and documentation
 
@@ -50,7 +43,7 @@ Keep examples small and reproducible. Preserve exact identifiers, commands, and 
 ## Open a pull request
 
 Explain the problem and resulting behavior. Link related issues without a placeholder issue number.
-Describe API, configuration, or event behavior changes. State whether a live upstream or Discord check was required.
+Describe API, configuration, or Discord report changes. State whether a live upstream or Discord check was required.
 Include commands and results. State any runtime checks that remain necessary.
 Respond to review with a correction or concrete evidence.
 
