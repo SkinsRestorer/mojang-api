@@ -1,6 +1,10 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
-use std::{num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    num::NonZeroU32,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     Extension, Json, Router,
@@ -111,8 +115,12 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
             enforce_rate_limit,
         ));
     // Health checks bypass the rate limit, so busy clients cannot fail platform probes.
+    let started = Instant::now();
     let unlimited_routes = Router::new()
-        .route("/health", get(health))
+        .route(
+            "/health",
+            get(move |state| async move { health(state, started) }),
+        )
         .method_not_allowed_fallback(method_not_allowed);
 
     // The last layer runs first: CORS wraps the rate limiter, so 429 responses carry CORS
@@ -271,24 +279,46 @@ async fn lookup_skin(
 }
 
 /// Check whether the service can look up usernames
+///
+/// The status code depends only on whether username lookups still run, so a Mojang outage
+/// does not make an orchestrator restart the service. `mojangCoolingDown` shows which
+/// lookups Mojang currently rate-limits.
 #[utoipa::path(
     get,
     path = "/health",
     responses(
         (status = 200, description = "Service is running", body = HealthResponse,
-            example = json!({"status": "UP"})),
+            example = json!({
+                "status": "UP",
+                "uptimeSeconds": 3600,
+                "mojangCoolingDown": {"usernameLookups": false, "skinLookups": false}
+            })),
         (status = 503, description = "Username lookups have stopped", body = HealthResponse,
-            example = json!({"status": "DOWN"}))
+            example = json!({
+                "status": "DOWN",
+                "uptimeSeconds": 3600,
+                "mojangCoolingDown": {"usernameLookups": false, "skinLookups": false}
+            }))
     ),
     tag = "health"
 )]
-async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
+fn health(
+    State(state): State<Arc<AppState>>,
+    started: Instant,
+) -> (StatusCode, Json<HealthResponse>) {
     let (code, status) = if state.batch_lookup.is_available() {
         (StatusCode::OK, HealthStatus::Up)
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, HealthStatus::Down)
     };
-    (code, Json(HealthResponse { status }))
+    (
+        code,
+        Json(HealthResponse {
+            status,
+            uptime_seconds: started.elapsed().as_secs(),
+            mojang_cooling_down: state.mojang.cooldowns(),
+        }),
+    )
 }
 
 async fn not_found() -> AppError {
@@ -356,7 +386,10 @@ mod tests {
         cache::CacheManager,
         metrics::Metrics,
         mojang::{MojangService, UpstreamError},
-        types::{ErrorResponse, ErrorType, SkinLookupResponse, SkinProperty, UuidLookupResponse},
+        types::{
+            ErrorResponse, ErrorType, MojangCooldowns, SkinLookupResponse, SkinProperty,
+            UuidLookupResponse,
+        },
         validation::{is_valid_minecraft_username, parse_minecraft_uuid},
     };
 
@@ -824,6 +857,94 @@ mod tests {
                 error: ErrorType::InternalTimeout
             }
         );
+    }
+
+    /// Mojang has rate-limited every route for both APIs.
+    struct CoolingDownMojangService;
+
+    #[async_trait]
+    impl MojangService for CoolingDownMojangService {
+        async fn lookup_names(
+            &self,
+            _names: &[String],
+        ) -> Result<Vec<(String, Uuid)>, UpstreamError> {
+            Err(UpstreamError::RateLimited {
+                retry_after: Duration::from_secs(30),
+            })
+        }
+
+        async fn lookup_skin(&self, _uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
+            Err(UpstreamError::RateLimited {
+                retry_after: Duration::from_secs(30),
+            })
+        }
+
+        fn cooldowns(&self) -> MojangCooldowns {
+            MojangCooldowns {
+                username_lookups: true,
+                skin_lookups: true,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_details_in_a_healthy_response() {
+        let (app, batch, _) = test_app();
+        let response = app
+            .oneshot(get("/health"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response_json(response).await;
+        assert_eq!(body.get("status").and_then(Value::as_str), Some("UP"));
+        assert!(
+            body.get("uptimeSeconds").is_some_and(Value::is_u64),
+            "{body}"
+        );
+        assert_eq!(
+            body.get("mojangCoolingDown"),
+            Some(&serde_json::json!({"usernameLookups": false, "skinLookups": false}))
+        );
+        batch.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn stays_healthy_while_mojang_rate_limits_every_route() {
+        let mojang: Arc<dyn MojangService> = Arc::new(CoolingDownMojangService);
+        let metrics = Arc::new(Metrics::default());
+        let cache = CacheManager::default();
+        let batch = BatchProcessor::start(
+            Arc::clone(&mojang),
+            cache.clone(),
+            Arc::clone(&metrics),
+            BatchConfig::default(),
+        );
+        let app = build_router(
+            AppState {
+                batch_lookup: batch.lookup(),
+                cache,
+                mojang,
+                metrics,
+            },
+            Vec::new(),
+        );
+
+        let response = app
+            .oneshot(get("/health"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "an orchestrator must not restart the service during a Mojang outage"
+        );
+        let body: Value = response_json(response).await;
+        assert_eq!(body.get("status").and_then(Value::as_str), Some("UP"));
+        assert_eq!(
+            body.get("mojangCoolingDown"),
+            Some(&serde_json::json!({"usernameLookups": true, "skinLookups": true}))
+        );
+        batch.shutdown().await;
     }
 
     #[tokio::test]

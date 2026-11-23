@@ -7,7 +7,8 @@ use std::{
 
 use mojang_api::{
     AppState, BatchConfig, BatchProcessor, CacheManager, Config, Metrics, MojangHttpClient,
-    MojangService, build_router, error::ErrorChain, reporter::DiscordReporter, server,
+    MojangService, build_router, error::ErrorChain, health_check::check_health,
+    reporter::DiscordReporter, server,
 };
 use tokio::{signal, sync::watch};
 use tracing::{error, info, level_filters::LevelFilter, warn};
@@ -18,6 +19,12 @@ type BoxError = Box<dyn Error + Send + Sync>;
 fn main() -> ExitCode {
     // Load .env before starting any runtime threads that could read the environment.
     let dotenv = dotenvy::dotenv();
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--health-check")
+    {
+        return health_check();
+    }
     let invalid_log_filter = match initialize_tracing() {
         Ok(invalid_log_filter) => invalid_log_filter,
         Err(error) => {
@@ -41,6 +48,27 @@ fn main() -> ExitCode {
             error!("{}", ErrorChain(&*error));
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Exits successfully when the server on the configured port reports that it is healthy.
+fn health_check() -> ExitCode {
+    let healthy = Config::from_env()
+        .map_err(BoxError::from)
+        .and_then(|config| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            Ok(runtime.block_on(check_health(config.server_port)))
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("health check failed: {}", ErrorChain(&*error));
+            false
+        });
+    if healthy {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

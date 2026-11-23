@@ -92,7 +92,7 @@ Missing profiles or texture properties return `200 OK` with `exists` set to `fal
 
 ### Other endpoints
 
-- `GET /health` returns `200` with `{"status":"UP"}`, or `503` with `{"status":"DOWN"}` when username lookups have stopped.
+- `GET /health` returns `200` with `"status":"UP"`, or `503` with `"status":"DOWN"` when username lookups have stopped. See [Health checks](#health-checks).
 - `GET /openapi` returns the generated OpenAPI document.
 - `GET /swagger` opens Swagger UI. `GET /` redirects to it.
 
@@ -148,6 +148,30 @@ docker run -d --name mojang-api --restart unless-stopped \
 Docker sends `SIGKILL` 10 seconds after `SIGTERM` by default. `--stop-timeout 60` gives the service time to drain requests and batches during shutdown. Give other orchestrators, such as Dokploy, the same stop grace period.
 
 The service is available at `http://localhost:3000`. Pass configuration with `-e NAME=value` or `--env-file`. To use a proxy list, mount the file into the container and set `PROXY_LIST_FILE` to its path inside the container.
+
+### Health checks
+
+`GET /health` returns a body like this:
+
+```json
+{
+  "status": "UP",
+  "uptimeSeconds": 3600,
+  "mojangCoolingDown": { "usernameLookups": false, "skinLookups": false }
+}
+```
+
+- `status` is `DOWN`, with status code `503`, only when username lookups have stopped. A restart fixes that state.
+- `uptimeSeconds` is the time since the server started. A small value after a long run shows a restart.
+- `mojangCoolingDown` shows which lookups Mojang has rate-limited on every outbound route. While a value is `true`, lookups that miss the cache get `SERVICE_UNAVAILABLE`. These values do not change `status` or the status code, because a restart does not end a Mojang rate limit.
+
+Container images without a shell or `curl` can run the binary itself as the health check command:
+
+```bash
+mojang-api --health-check
+```
+
+The command requests `/health` on `127.0.0.1` at the configured port. It exits with `0` when the response is `200`, and with `1` otherwise. It reads the same `PORT`, `SERVER_PORT`, and `.env` settings as the server. Use the path of the binary in the image, and set it as the health check command in Docker or Dokploy.
 
 ## Architecture
 

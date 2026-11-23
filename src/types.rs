@@ -74,8 +74,23 @@ pub(crate) struct MojangProperty {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct HealthResponse {
+    /// `DOWN` only when username lookups have stopped. Mojang rate limits do not change it.
     pub status: HealthStatus,
+    /// Seconds since the server started.
+    #[schema(example = 3600)]
+    pub uptime_seconds: u64,
+    pub mojang_cooling_down: MojangCooldowns,
+}
+
+/// Lookups that Mojang has rate-limited on every outbound route. While a value is `true`,
+/// requests that miss the cache get `SERVICE_UNAVAILABLE`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MojangCooldowns {
+    pub username_lookups: bool,
+    pub skin_lookups: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]

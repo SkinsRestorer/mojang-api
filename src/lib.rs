@@ -4,6 +4,7 @@ mod cache;
 mod config;
 mod docs;
 pub mod error;
+pub mod health_check;
 mod http_client;
 mod log_throttle;
 mod metrics;

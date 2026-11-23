@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use ipnet::IpNet;
 use mojang_api::{
     AppState, BatchConfig, BatchProcessor, CacheManager, Metrics, MojangService, build_router,
-    mojang::UpstreamError, server, types::SkinProperty,
+    health_check::check_health, mojang::UpstreamError, server, types::SkinProperty,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -383,4 +383,31 @@ async fn closes_connections_that_do_not_finish_their_headers() {
     );
 
     server.stop().await;
+}
+
+#[tokio::test]
+async fn health_check_flag_reports_the_server_status() {
+    let server = TestServer::start(FakeMojang::default(), Vec::new()).await;
+    let port = server.address.port();
+    assert!(check_health(port).await, "a running server is healthy");
+
+    let TestServer {
+        stop, task, batch, ..
+    } = server;
+    batch.shutdown().await;
+    assert!(
+        !check_health(port).await,
+        "a 503 response fails the health check"
+    );
+
+    stop.send(())
+        .expect("server should be waiting for shutdown");
+    timeout(WAIT, task)
+        .await
+        .expect("server should stop")
+        .expect("server task should not panic");
+    assert!(
+        !check_health(port).await,
+        "a closed port fails the health check"
+    );
 }

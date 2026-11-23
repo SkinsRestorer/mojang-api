@@ -28,7 +28,7 @@ use crate::{
     http_client::http_client_builder,
     log_throttle::{LOG_INTERVAL, LogThrottle},
     metrics::Metrics,
-    types::{MojangBatchProfile, MojangProfile, SkinProperty},
+    types::{MojangBatchProfile, MojangCooldowns, MojangProfile, SkinProperty},
     validation::parse_minecraft_uuid,
 };
 
@@ -75,6 +75,11 @@ pub trait MojangService: Send + Sync {
     async fn lookup_names(&self, names: &[String]) -> Result<Vec<(String, Uuid)>, UpstreamError>;
 
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError>;
+
+    /// Reports the lookups that Mojang has rate-limited on every outbound route.
+    fn cooldowns(&self) -> MojangCooldowns {
+        MojangCooldowns::default()
+    }
 }
 
 /// One outbound path to Mojang: a direct connection or a single proxy.
@@ -272,6 +277,16 @@ impl MojangHttpClient {
                 })
         };
         find(true).or_else(|| if allow_unreachable { find(false) } else { None })
+    }
+
+    /// Reports whether Mojang has rate-limited every route on every one of `upstreams`.
+    fn is_cooling_down(&self, upstreams: &[usize]) -> bool {
+        let now = self.now_millis();
+        self.routes.iter().all(|route| {
+            upstreams
+                .iter()
+                .all(|&upstream| route.is_rate_limited(upstream, now))
+        })
     }
 
     /// Reports how long until the first route becomes available for one of `upstreams` again.
@@ -490,6 +505,13 @@ impl MojangHttpClient {
 
 #[async_trait]
 impl MojangService for MojangHttpClient {
+    fn cooldowns(&self) -> MojangCooldowns {
+        MojangCooldowns {
+            username_lookups: self.is_cooling_down(&self.endpoints.batch_upstreams()),
+            skin_lookups: self.is_cooling_down(&[self.endpoints.profile_upstream()]),
+        }
+    }
+
     async fn lookup_names(&self, names: &[String]) -> Result<Vec<(String, Uuid)>, UpstreamError> {
         let body = Bytes::from(
             serde_json::to_vec(names).map_err(|error| self.record_invalid_response(error))?,
@@ -740,7 +762,10 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use crate::{metrics::Metrics, types::SkinProperty};
+    use crate::{
+        metrics::Metrics,
+        types::{MojangCooldowns, SkinProperty},
+    };
 
     use super::{
         MojangEndpoints, MojangHttpClient, MojangService, ProxyParseError, UpstreamError,
@@ -974,6 +999,14 @@ mod tests {
             "the cooldown should short-circuit later requests"
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            client.cooldowns(),
+            MojangCooldowns {
+                username_lookups: false,
+                skin_lookups: true,
+            },
+            "only the rate-limited API reports a cooldown"
+        );
         let snapshot = client.metrics.snapshot();
         assert_eq!(snapshot.mojang_errors, 1);
         assert_eq!(snapshot.mojang_cooldown_rejections, 1);
