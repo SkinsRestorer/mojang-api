@@ -2,7 +2,10 @@ name: Build and test
 
 on:
   push:
+    # Pushes to main run these checks through the publish workflow before it builds images.
+    branches-ignore: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -21,12 +24,16 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+        # Installs the toolchain and components pinned in rust-toolchain.toml.
+        run: rustup toolchain install
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -39,3 +46,26 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+  msrv:
+    name: Check minimum supported Rust version
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read minimum supported Rust version
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Check with the minimum supported Rust version
+        run: cargo "+${{ steps.msrv.outputs.version }}" check --all-targets --locked

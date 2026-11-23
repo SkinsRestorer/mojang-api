@@ -17,8 +17,15 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  test:
+    name: Build and test
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+
   build:
     name: Build ${{ matrix.arch }} image
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
@@ -31,12 +38,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -44,16 +51,37 @@ jobs:
 
       - name: Install Railpack
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ matrix.arch }}
+          RAILPACK_VERSION: v0.43.0
         run: |
+          case "$ARCH" in
+            amd64)
+              target=x86_64-unknown-linux-musl
+              sha256=248a8f60f36854aabed6124113631078a802de3461660855fc4de9c26065c1fb
+              ;;
+            arm64)
+              target=arm64-unknown-linux-musl
+              sha256=732ece14eb4f4676a43ebba19431f954edf7b130acb76159ef0f2ff86ac42ac9
+              ;;
+            *)
+              echo "::error::Unsupported architecture $ARCH"
+              exit 1
+              ;;
+          esac
+
+          archive="$RUNNER_TEMP/railpack.tar.gz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            "https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${target}.tar.gz"
+          echo "${sha256}  ${archive}" | sha256sum --check --strict
+
           mkdir -p "$HOME/.local/bin"
-          curl --fail --silent --show-error --location https://railpack.com/install.sh | sh -s -- --bin-dir "$HOME/.local/bin"
+          tar -xzf "$archive" -C "$HOME/.local/bin" railpack
           "$HOME/.local/bin/railpack" --version
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Start BuildKit
         run: |
-          docker run --rm --privileged -d --name railpack-buildkit moby/buildkit:latest
+          docker run --rm --privileged -d --name railpack-buildkit moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
           echo "BUILDKIT_HOST=docker-container://railpack-buildkit" >> "$GITHUB_ENV"
 
       - name: Build and push image with Railpack
@@ -76,7 +104,7 @@ jobs:
 
     steps:
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
