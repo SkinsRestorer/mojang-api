@@ -61,6 +61,125 @@
           padding: 12px;
         }
       }
+
+      /* Swagger UI has no dark theme, so dark mode recolors its main surfaces. */
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --docs-bg: #1b1d23;
+          --docs-surface: #24272f;
+          --docs-border: #3d424e;
+          --docs-text: #e4e7ec;
+          --docs-muted: #aab1bd;
+          --docs-link: #7cb7ff;
+        }
+
+        body,
+        .swagger-ui .scheme-container {
+          background: var(--docs-bg);
+        }
+
+        .swagger-ui,
+        .swagger-ui :is(.info :is(.title, h1, h2, h3, h4, h5, p, li, table, .base-url), .opblock-tag, .opblock-tag small,
+          .opblock .opblock-summary-path, .opblock .opblock-summary-description, .opblock .opblock-section-header :is(h4, label),
+          .opblock-description-wrapper, .opblock-description-wrapper :is(h4, p), .parameter__name, .parameter__type,
+          .response-col_status, .responses-inner :is(h4, h5), table thead tr :is(td, th), table.headers td, .tab li,
+          label, section h3, .servers > label, .scheme-container .schemes > .schemes-server-container > label, .model,
+          .model-title, .btn, select, input, textarea) {
+          color: var(--docs-text);
+        }
+
+        .swagger-ui :is(.parameter__in, .parameter__extension, .prop-format, .model .property.primitive) {
+          color: var(--docs-muted);
+        }
+
+        .swagger-ui :is(.info a, .info .url) {
+          color: var(--docs-link);
+        }
+
+        .swagger-ui .opblock-tag,
+        .swagger-ui table thead tr :is(td, th),
+        .swagger-ui .opblock .opblock-section-header {
+          border-color: var(--docs-border);
+        }
+
+        .swagger-ui .opblock .opblock-section-header {
+          background: var(--docs-surface);
+          box-shadow: none;
+        }
+
+        .swagger-ui .opblock-tag:hover {
+          background: rgb(255 255 255 / 4%);
+        }
+
+        .swagger-ui :is(.markdown, .renderedMarkdown) code {
+          background: rgb(255 255 255 / 10%);
+          color: #e0b3ff;
+        }
+
+        .swagger-ui .opblock-body pre.microlight,
+        .swagger-ui .highlight-code > .microlight {
+          background: #111318 !important;
+          border: 1px solid var(--docs-border);
+        }
+
+        .swagger-ui :is(select, input[type="text"], textarea),
+        .swagger-ui input[disabled] {
+          background-color: var(--docs-surface);
+          border-color: var(--docs-border);
+        }
+
+        .swagger-ui select {
+          background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%23e4e7ec' d='M13.418 7.859a.695.695 0 0 1 .978 0 .68.68 0 0 1 0 .969l-3.908 3.83a.697.697 0 0 1-.979 0l-3.908-3.83a.68.68 0 0 1 0-.969.695.695 0 0 1 .978 0L10 11z'/%3E%3C/svg%3E");
+        }
+
+        .swagger-ui .parameter__name.required span,
+        .swagger-ui .parameter__name.required::after {
+          color: #ff8080;
+        }
+
+        .swagger-ui ::placeholder {
+          color: var(--docs-muted);
+        }
+
+        .swagger-ui .btn {
+          border-color: var(--docs-muted);
+        }
+
+        .swagger-ui :is(.arrow, .opblock-control-arrow svg, .expand-operation svg, .opblock-tag svg) {
+          fill: var(--docs-text);
+        }
+
+        .swagger-ui .tab li:first-of-type::after {
+          background: var(--docs-border);
+        }
+
+        /* Dark labels keep every method badge at AA contrast without changing its color. */
+        .swagger-ui .opblock .opblock-summary-method {
+          color: #111318;
+          text-shadow: none;
+        }
+
+        .swagger-ui .opblock.opblock-head .opblock-summary-method {
+          background: #b57cff;
+        }
+
+        .swagger-ui .opblock.opblock-options .opblock-summary-method {
+          background: #8fa3bf;
+        }
+
+        .swagger-ui .info .title small {
+          background: #5c6370;
+        }
+
+        .swagger-ui .info .title small.version-stamp {
+          background: #3f7d16;
+        }
+
+        .swagger-ui .info .title small pre {
+          color: #fff;
+        }
+      }
     </style>
   </head>
 
