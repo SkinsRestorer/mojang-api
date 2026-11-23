@@ -143,6 +143,22 @@ mod tests {
             )
         );
         assert_eq!(
+            render(UpstreamError::Overloaded).await,
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some("1".to_owned()),
+                r#"{"error":"SERVICE_UNAVAILABLE"}"#.to_owned()
+            )
+        );
+        assert_eq!(
+            render(UpstreamError::Transport).await,
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+                r#"{"error":"INTERNAL_ERROR"}"#.to_owned()
+            )
+        );
+        assert_eq!(
             render(UpstreamError::HttpStatus(500)).await,
             (
                 StatusCode::BAD_GATEWAY,
