@@ -74,6 +74,8 @@ Usernames must have 1 to 16 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`.
 GET /mojang/skin/{uuid}
 ```
 
+The UUID may use the dashed form or 32 hex digits without dashes.
+
 A successful response contains the signed Mojang texture property:
 
 ```json
@@ -86,7 +88,7 @@ A successful response contains the signed Mojang texture property:
 }
 ```
 
-Missing profiles or texture properties return `200 OK` with `exists` set to `false`.
+Missing profiles or texture properties return `200 OK` with `exists` set to `false` and `skinProperty` set to `null`.
 
 ### Other endpoints
 
@@ -126,8 +128,8 @@ Pushes to `main` build a release image with Railpack and publish it to
 - `main`: the latest published build from `main`
 - `sha-<12-character-commit-sha>`: the build for a specific commit
 
-The workflow builds images only after the build, test, and lint jobs pass for the same
-commit. Each tag is a multi-architecture image for `amd64` and `arm64`. After it publishes
+The workflow builds images only after the formatting, Clippy, test, and minimum Rust version
+checks pass for the same commit. Each tag is a multi-architecture image for `amd64` and `arm64`. After it publishes
 the image, the workflow calls the Dokploy webhook in the `DOKPLOY_WEBHOOK_URL` secret to deploy it.
 
 Run the published image:
@@ -137,7 +139,7 @@ docker run -d --name mojang-api --restart unless-stopped \
   -p 3000:3000 ghcr.io/skinsrestorer/mojang-api:latest
 ```
 
-The service is available at `http://localhost:3000`.
+The service is available at `http://localhost:3000`. Pass configuration with `-e NAME=value` or `--env-file`. To use a proxy list, mount the file into the container and set `PROXY_LIST_FILE` to its path inside the container.
 
 ## Architecture
 

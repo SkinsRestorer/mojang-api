@@ -8,7 +8,7 @@ Search existing reports before opening another issue. Add new evidence to an exi
 
 ## Details that help
 
-Service commit, endpoint/method, cache or proxy configuration without credentials, response status, and redacted logs.
+Service commit or image tag, endpoint and method, configuration variables without credentials, response status, and redacted logs.
 
 Include the failing step, expected result, actual result, and a minimal reproduction.
 Use text for logs and commands. Use screenshots for visible problems.

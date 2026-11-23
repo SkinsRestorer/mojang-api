@@ -28,7 +28,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
-Cover cache expiry, batching, rate limits, and invalid names/UUIDs with focused tests. Use deterministic local fixtures for upstream behavior. Keep proxy credentials and webhook URLs out of reports. Check the health endpoint before live upstream requests.
+When you change cache expiry, batching, rate limits, or name and UUID validation, add focused tests for it. Use deterministic local fixtures for upstream behavior. Keep proxy credentials and webhook URLs out of reports. Check the health endpoint before live upstream requests.
 
 Run the relevant checks before review. State the command and result in the pull request.
 If a check cannot run, explain the missing dependency or service. Do not claim it passed.

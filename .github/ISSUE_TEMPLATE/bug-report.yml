@@ -42,8 +42,8 @@ body:
   id: environment
   attributes:
     label: Versions and environment
-    description: Service commit, endpoint/method, cache or proxy configuration without credentials, response
-      status, and redacted logs.
+    description: Service commit or image tag, endpoint and method, configuration variables without credentials,
+      response status, and redacted logs.
   validations:
     required: true
 - type: textarea
