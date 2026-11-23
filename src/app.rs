@@ -4,12 +4,12 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{Path, State, rejection::PathRejection},
+    extract::{Path, Request, State, rejection::PathRejection},
     http::{
         HeaderValue, Method, StatusCode,
         header::{CACHE_CONTROL, X_CONTENT_TYPE_OPTIONS},
     },
-    middleware,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -17,7 +17,6 @@ use ipnet::IpNet;
 use serde::Serialize;
 use tower_http::{
     cors::{Any, CorsLayer},
-    timeout::TimeoutLayer,
     trace::TraceLayer,
 };
 use utoipa::OpenApi;
@@ -39,7 +38,7 @@ use crate::{
 
 const RATE_LIMIT: NonZeroU32 = NonZeroU32::new(1_000).unwrap();
 const RATE_LIMIT_WINDOW: Duration = Duration::from_mins(1);
-/// A last-resort deadline. Lookups normally fail sooner with a typed JSON error.
+/// A last-resort deadline. Lookups normally fail sooner through their own timeouts.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const FOUND_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=900");
 /// Missing profiles may be created soon, so clients should not keep them for long.
@@ -108,15 +107,17 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
     unlimited_routes
         .merge(limited_routes)
         .with_state(state)
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::SERVICE_UNAVAILABLE,
+        .layer(middleware::from_fn_with_state(
             REQUEST_TIMEOUT,
+            enforce_deadline,
         ))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods([Method::GET])
-                .allow_headers(Any),
+                .allow_headers(Any)
+                // Lets browser scripts read `Retry-After` and the `RateLimit-*` headers.
+                .expose_headers(Any),
         )
         .layer(middleware::map_response(set_nosniff))
         .layer(TraceLayer::new_for_http())
@@ -149,12 +150,10 @@ async fn lookup_uuid(
     name: Result<Path<String>, PathRejection>,
 ) -> Result<Response, AppError> {
     state.metrics.increment_uuid_requests();
-    let Ok(Path(name)) = name else {
-        return Err(AppError::InvalidName);
-    };
-    if !is_valid_minecraft_username(&name) {
-        return Err(AppError::InvalidName);
-    }
+    let Path(name) = name
+        .ok()
+        .filter(|Path(name)| is_valid_minecraft_username(name))
+        .ok_or(AppError::InvalidName)?;
 
     let uuid = state.batch_lookup.lookup(name).await?;
     Ok(cacheable_json(
@@ -237,21 +236,12 @@ async fn lookup_skin(
     tag = "health"
 )]
 async fn health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
-    if state.batch_lookup.is_available() {
-        (
-            StatusCode::OK,
-            Json(HealthResponse {
-                status: HealthStatus::Up,
-            }),
-        )
+    let (code, status) = if state.batch_lookup.is_available() {
+        (StatusCode::OK, HealthStatus::Up)
     } else {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(HealthResponse {
-                status: HealthStatus::Down,
-            }),
-        )
-    }
+        (StatusCode::SERVICE_UNAVAILABLE, HealthStatus::Down)
+    };
+    (code, Json(HealthResponse { status }))
 }
 
 async fn not_found() -> AppError {
@@ -260,6 +250,17 @@ async fn not_found() -> AppError {
 
 async fn method_not_allowed() -> AppError {
     AppError::MethodNotAllowed
+}
+
+/// Answers with the documented `INTERNAL_TIMEOUT` error when a request takes too long.
+async fn enforce_deadline(
+    State(deadline): State<Duration>,
+    request: Request,
+    next: Next,
+) -> Response {
+    tokio::time::timeout(deadline, next.run(request))
+        .await
+        .unwrap_or_else(|_| AppError::Timeout.into_response())
 }
 
 /// Stops browsers from treating JSON responses as another content type.
@@ -293,8 +294,8 @@ mod tests {
         http::{
             Method, Request, StatusCode,
             header::{
-                ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, LOCATION, ORIGIN, RETRY_AFTER,
-                X_CONTENT_TYPE_OPTIONS,
+                ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
+                LOCATION, ORIGIN, RETRY_AFTER, X_CONTENT_TYPE_OPTIONS,
             },
         },
     };
@@ -310,7 +311,7 @@ mod tests {
         types::{ErrorResponse, ErrorType, SkinLookupResponse, SkinProperty, UuidLookupResponse},
     };
 
-    use super::{AppState, build_router};
+    use super::{AppState, build_router, enforce_deadline};
 
     struct FakeMojangService {
         uuid: Uuid,
@@ -386,11 +387,7 @@ mod tests {
         let (app, batch, uuid) = test_app();
         let uuid_response = app
             .clone()
-            .oneshot(
-                Request::get("/mojang/uuid/Pistonmaster")
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
+            .oneshot(get("/mojang/uuid/Pistonmaster"))
             .await
             .expect("request should succeed");
         assert_eq!(uuid_response.status(), StatusCode::OK);
@@ -407,11 +404,7 @@ mod tests {
         );
 
         let skin_response = app
-            .oneshot(
-                Request::get(format!("/mojang/skin/{uuid}"))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
+            .oneshot(get(&format!("/mojang/skin/{uuid}")))
             .await
             .expect("request should succeed");
         assert_eq!(skin_response.status(), StatusCode::OK);
@@ -434,11 +427,7 @@ mod tests {
         let (app, batch, _) = test_app();
         let invalid_name = app
             .clone()
-            .oneshot(
-                Request::get("/mojang/uuid/invalid%20name")
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
+            .oneshot(get("/mojang/uuid/invalid%20name"))
             .await
             .expect("request should succeed");
         assert_eq!(invalid_name.status(), StatusCode::BAD_REQUEST);
@@ -450,11 +439,7 @@ mod tests {
         );
 
         let invalid_uuid = app
-            .oneshot(
-                Request::get("/mojang/skin/not-a-uuid")
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
+            .oneshot(get("/mojang/skin/not-a-uuid"))
             .await
             .expect("request should succeed");
         assert_eq!(invalid_uuid.status(), StatusCode::BAD_REQUEST);
@@ -472,11 +457,7 @@ mod tests {
     async fn serves_openapi_as_structured_json() {
         let (app, batch, _) = test_app();
         let response = app
-            .oneshot(
-                Request::get("/openapi")
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
+            .oneshot(get("/openapi"))
             .await
             .expect("request should succeed");
         assert_eq!(response.status(), StatusCode::OK);
@@ -603,6 +584,11 @@ mod tests {
             Some(&"*".parse().expect("header should parse")),
             "browsers need CORS headers to read a 429"
         );
+        assert_eq!(
+            limited.headers().get(ACCESS_CONTROL_EXPOSE_HEADERS),
+            Some(&"*".parse().expect("header should parse")),
+            "browser scripts need Retry-After and the RateLimit-* headers"
+        );
         assert!(limited.headers().contains_key(RETRY_AFTER));
         assert_eq!(
             response_json::<ErrorResponse>(limited).await,
@@ -633,6 +619,30 @@ mod tests {
         assert_eq!(health.status(), StatusCode::OK);
 
         batch.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn answers_slow_requests_with_a_typed_timeout() {
+        let app = axum::Router::new()
+            .route(
+                "/slow",
+                axum::routing::get(|| tokio::time::sleep(Duration::from_secs(60))),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Duration::from_millis(10),
+                enforce_deadline,
+            ));
+        let response = app
+            .oneshot(get("/slow"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response_json::<ErrorResponse>(response).await,
+            ErrorResponse {
+                error: ErrorType::InternalTimeout
+            }
+        );
     }
 
     #[tokio::test]
