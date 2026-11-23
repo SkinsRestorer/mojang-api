@@ -1,7 +1,10 @@
 name: Cargo deny
 
 on:
+  # Other branches are checked through their pull requests. Renovate automerges non-major updates
+  # by pushing its branch without opening a pull request, so those pushes need their own run.
   push:
+    branches: [main, 'renovate/**']
   pull_request:
     branches: [main]
   schedule:
@@ -11,7 +14,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: cargo-deny-${{ github.ref }}
+  # Include the event so that a push to main does not cancel the weekly scheduled run.
+  group: cargo-deny-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

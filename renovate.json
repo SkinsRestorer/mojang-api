@@ -21,6 +21,13 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "cargo-deny release installed by taiki-e/install-action in the cargo-deny workflow.",
+      "managerFilePatterns": ["/^\\.github/workflows/cargo-deny\\.yml$/"],
+      "matchStrings": ["tool: (?<depName>cargo-deny)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "crate"
+    },
+    {
+      "customType": "regex",
       "description": "Railpack release installed by the publish workflow. Update its SHA-256 checksums with the version.",
       "managerFilePatterns": ["/^\\.github/workflows/publish-ghcr\\.yml$/"],
       "matchStrings": ["RAILPACK_VERSION: (?<currentValue>v\\S+)"],

@@ -1,9 +1,11 @@
 name: Build and test
 
 on:
+  # Other branches are tested through their pull requests. Renovate automerges non-major updates
+  # by pushing its branch without opening a pull request, so those pushes need their own run.
+  # Pushes to main run these checks through the publish workflow before it builds images.
   push:
-    # Pushes to main run these checks through the publish workflow before it builds images.
-    branches-ignore: [main]
+    branches: ['renovate/**']
   pull_request:
   workflow_call:
 
