@@ -2,7 +2,9 @@ use std::{
     future::Future,
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll, ready},
     time::Duration,
 };
 
@@ -13,7 +15,12 @@ use hyper_util::{
     server::graceful::GracefulShutdown,
 };
 use socket2::{Domain, Protocol, Socket, Type};
-use tokio::{net::TcpListener, sync::Semaphore, time::timeout};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpListener,
+    sync::Semaphore,
+    time::{Sleep, sleep, timeout},
+};
 use tower::ServiceExt;
 use tracing::{debug, error, warn};
 
@@ -28,14 +35,18 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 /// Caps open connections for the whole process.
 ///
-/// There is deliberately no per-IP connection cap and no response write timeout. Behind the
-/// reverse proxy every TCP peer is the proxy, so a per-IP cap would throttle all production
-/// traffic, and the proxy already absorbs clients that read responses slowly.
+/// There is deliberately no per-IP connection cap. Behind the reverse proxy every TCP peer is
+/// the proxy, so a per-IP cap would throttle all production traffic. Clients that stop
+/// reading are closed by [`WRITE_STALL_TIMEOUT`] instead.
 const MAX_CONNECTIONS: usize = 4_096;
 /// Matches the backlog that Tokio's `TcpListener::bind` uses.
 const LISTEN_BACKLOG: i32 = 1_024;
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Closes connections whose client stops reading a response. Hyper has no write timeout, so
+/// a client that requests a large response and never reads it would hold a connection slot
+/// forever.
+const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Binds a dual-stack listener on `[::]:port` that accepts IPv4 and IPv6 clients.
 ///
@@ -113,7 +124,7 @@ pub async fn serve(listener: TcpListener, router: Router, shutdown: impl Future<
                     warn!(error = %ErrorChain(&error), "could not accept a connection");
                     tokio::select! {
                         () = &mut shutdown => break,
-                        () = tokio::time::sleep(ACCEPT_ERROR_BACKOFF) => continue,
+                        () = sleep(ACCEPT_ERROR_BACKOFF) => continue,
                     }
                 }
             },
@@ -126,7 +137,10 @@ pub async fn serve(listener: TcpListener, router: Router, shutdown: impl Future<
                 .insert(ConnectInfo::<SocketAddr>(peer));
             router.clone().oneshot(request.map(Body::new))
         });
-        let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
+        let connection = graceful.watch(builder.serve_connection(
+            TokioIo::new(WriteStallTimeout::new(stream, WRITE_STALL_TIMEOUT)),
+            service,
+        ));
         tokio::spawn(async move {
             if let Err(error) = connection.await {
                 debug!(%peer, error = %ErrorChain(&error), "connection closed with an error");
@@ -150,6 +164,92 @@ fn is_connection_error(error: &io::Error) -> bool {
     )
 }
 
+/// Fails writes, flushes, and shutdowns that make no progress for `timeout`.
+struct WriteStallTimeout<T> {
+    io: T,
+    timeout: Duration,
+    /// Set while a write operation is blocked.
+    stalled_since: Option<Pin<Box<Sleep>>>,
+}
+
+impl<T> WriteStallTimeout<T> {
+    const fn new(io: T, timeout: Duration) -> Self {
+        Self {
+            io,
+            timeout,
+            stalled_since: None,
+        }
+    }
+
+    fn poll_progress<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        operation: impl FnOnce(Pin<&mut T>, &mut Context<'_>) -> Poll<io::Result<R>>,
+    ) -> Poll<io::Result<R>>
+    where
+        T: Unpin,
+    {
+        if let Poll::Ready(result) = operation(Pin::new(&mut self.io), cx) {
+            self.stalled_since = None;
+            return Poll::Ready(result);
+        }
+        let timeout = self.timeout;
+        ready!(
+            self.stalled_since
+                .get_or_insert_with(|| Box::pin(sleep(timeout)))
+                .as_mut()
+                .poll(cx)
+        );
+        self.stalled_since = None;
+        Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the client stopped reading the response",
+        )))
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for WriteStallTimeout<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().io).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for WriteStallTimeout<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.get_mut()
+            .poll_progress(cx, |io, cx| io.poll_write(cx, buf))
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        self.get_mut()
+            .poll_progress(cx, |io, cx| io.poll_write_vectored(cx, bufs))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.io.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.get_mut().poll_progress(cx, AsyncWrite::poll_flush)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.get_mut().poll_progress(cx, AsyncWrite::poll_shutdown)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, time::Duration};
@@ -161,9 +261,11 @@ mod tests {
         sync::{Notify, oneshot},
     };
 
-    use super::{HEADER_READ_TIMEOUT, MAX_REQUEST_HEAD_BYTES, bind, serve};
+    use super::{HEADER_READ_TIMEOUT, MAX_REQUEST_HEAD_BYTES, WRITE_STALL_TIMEOUT, bind, serve};
 
     const LARGE_BODY_BYTES: usize = 4 * MAX_REQUEST_HEAD_BYTES;
+    /// Larger than the loopback socket buffers can hold, so the server's writes block.
+    const HUGE_BODY_BYTES: usize = 64 * 1024 * 1024;
 
     async fn start() -> (
         std::net::SocketAddr,
@@ -195,7 +297,8 @@ mod tests {
                     },
                 ),
             )
-            .route("/large", get(|| async { "x".repeat(LARGE_BODY_BYTES) }));
+            .route("/large", get(|| async { "x".repeat(LARGE_BODY_BYTES) }))
+            .route("/huge", get(|| async { "x".repeat(HUGE_BODY_BYTES) }));
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(serve(listener, router, async {
             drop(stopped.await);
@@ -398,6 +501,35 @@ mod tests {
         assert!(buffer[..read].starts_with(b"HTTP/1.1 200"), "{buffer:?}");
         let elapsed = time_until_closed(&mut idle).await;
         assert!(elapsed >= HEADER_READ_TIMEOUT, "closed after {elapsed:?}");
+
+        stop.send(())
+            .expect("server should be waiting for shutdown");
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("server should stop")
+            .expect("server task should not panic");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn closes_connections_whose_client_stops_reading_the_response() {
+        let (address, stop, task) = start().await;
+
+        let mut stalled = TcpStream::connect(address)
+            .await
+            .expect("stalled client should connect");
+        stalled
+            .write_all(b"GET /huge HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .expect("request should be written");
+        // The paused clock jumps ahead once the server blocks on the full socket buffers.
+        tokio::time::sleep(2 * WRITE_STALL_TIMEOUT).await;
+
+        let mut received = Vec::new();
+        let result = stalled.read_to_end(&mut received).await;
+        assert!(
+            result.is_err() || received.len() < HUGE_BODY_BYTES,
+            "the server should drop the connection instead of waiting for the reader"
+        );
 
         stop.send(())
             .expect("server should be waiting for shutdown");

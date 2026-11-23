@@ -163,7 +163,7 @@ The timeouts fit the SkinsRestorer plugin, which stops waiting after 5 seconds. 
 
 The rate limiter uses the generic cell rate algorithm, so a client cannot send two bursts across a window boundary. It shards client state to reduce lock contention and caps the number of tracked clients. When a shard is full, it samples a few clients and forgets the one closest to a full quota, so a rate-limited client rarely gets a fresh quota.
 
-The HTTP server listens on `[::]` for both IPv4 and IPv6 clients, and falls back to IPv4 only with a warning when the host has no IPv6. It closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 8 seconds. It has no per-IP connection cap, because behind a reverse proxy every connection comes from the proxy.
+The HTTP server listens on `[::]` for both IPv4 and IPv6 clients, and falls back to IPv4 only with a warning when the host has no IPv6. It closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 8 seconds. It closes a connection when a response write makes no progress for 30 seconds, so a client that stops reading cannot hold a connection slot. It has no per-IP connection cap, because behind a reverse proxy every connection comes from the proxy.
 
 Logs are plain text on stdout, with colors only when stdout is a terminal. Warnings that can repeat for every request log at most once per minute: a full batch queue, too many skin lookups, every proxy cooling down for a Mojang API, and `5xx` responses. Each of these lines has a `suppressed` field with the number of identical events since the previous line.
 
