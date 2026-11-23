@@ -55,8 +55,13 @@ impl Config {
             (None, Some(value)) => parse_port("PORT", &value)?,
             (None, None) => DEFAULT_SERVER_PORT,
         };
+        // Paths do not have to be Unicode, so only Unicode values are trimmed.
         let proxy_list_file = lookup("PROXY_LIST_FILE")
-            .filter(|value| !value.to_string_lossy().trim().is_empty())
+            .map(|value| match value.into_string() {
+                Ok(value) => OsString::from(value.trim()),
+                Err(value) => value,
+            })
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         let discord_webhook = text("DISCORD_WEBHOOK")?
             .map(|value| parse_discord_webhook(&value))
@@ -243,8 +248,10 @@ mod tests {
 
     #[test]
     fn reads_the_proxy_list_path() {
-        let config =
-            load(&[("PROXY_LIST_FILE", "proxies.txt")]).expect("configuration should be valid");
-        assert_eq!(config.proxy_list_file, Some(PathBuf::from("proxies.txt")));
+        for value in ["proxies.txt", " proxies.txt\t"] {
+            let config =
+                load(&[("PROXY_LIST_FILE", value)]).expect("configuration should be valid");
+            assert_eq!(config.proxy_list_file, Some(PathBuf::from("proxies.txt")));
+        }
     }
 }
