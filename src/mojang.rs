@@ -363,7 +363,7 @@ impl MojangService for MojangHttpClient {
             .filter_map(|profile| {
                 let uuid = parse_minecraft_uuid(&profile.id);
                 if uuid.is_none() {
-                    warn!(id = %profile.id, "ignoring Mojang profile with an invalid UUID");
+                    warn!(id = ?profile.id, "ignoring Mojang profile with an invalid UUID");
                 }
                 uuid.map(|uuid| (profile.name, uuid))
             })

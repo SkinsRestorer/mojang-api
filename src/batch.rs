@@ -13,7 +13,11 @@ use tokio::{
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use crate::{cache::CacheManager, metrics::Metrics, mojang::MojangService, mojang::UpstreamError};
+use crate::{
+    cache::{CacheLoad, CacheManager},
+    metrics::Metrics,
+    mojang::{MojangService, UpstreamError},
+};
 
 const BATCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Mojang's bulk profile endpoints accept at most 10 names per request.
@@ -144,14 +148,15 @@ impl BatchLookup {
                 }
             })
             .await
-            .map_err(|error| *error)?;
+            .map_err(|error| *error);
 
-        if result.was_hit() {
+        // A failed load was still a miss, so count it before returning the error.
+        if result.as_ref().is_ok_and(CacheLoad::was_hit) {
             self.metrics.increment_uuid_cache_hits();
         } else {
             self.metrics.increment_uuid_cache_misses();
         }
-        Ok(result.into_value())
+        Ok(result?.into_value())
     }
 
     /// Reports whether the batch processor still accepts lookups.
@@ -617,10 +622,11 @@ mod tests {
             error: Some(UpstreamError::Timeout),
             ..FakeMojangService::default()
         });
+        let metrics = Arc::new(Metrics::default());
         let processor = BatchProcessor::start(
             service,
             CacheManager::default(),
-            Arc::new(Metrics::default()),
+            Arc::clone(&metrics),
             test_config(10),
         );
         let lookup = processor.lookup();
@@ -628,6 +634,12 @@ mod tests {
         assert_eq!(
             lookup.lookup("Pistonmaster".to_owned()).await,
             Err(UpstreamError::Timeout)
+        );
+        let snapshot = metrics.snapshot();
+        assert_eq!(
+            (snapshot.uuid_cache_hits, snapshot.uuid_cache_misses),
+            (0, 1),
+            "a failed lookup still counts as a cache miss"
         );
 
         drop(lookup);

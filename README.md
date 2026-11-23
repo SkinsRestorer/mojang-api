@@ -98,7 +98,7 @@ Lookup responses for existing profiles include `Cache-Control: public, max-age=9
 
 ### Errors
 
-Error responses have a JSON body such as `{"error":"INVALID_NAME"}`. The exception is a request that runs longer than 30 seconds: it gets `503` with an empty body.
+Every error response has a JSON body such as `{"error":"INVALID_NAME"}`. A request that runs longer than 30 seconds gets `503` with `INTERNAL_TIMEOUT`.
 
 | Status | `error` | Meaning |
 | --- | --- | --- |

@@ -23,7 +23,7 @@ use utoipa::OpenApi;
 
 use crate::{
     batch::BatchLookup,
-    cache::CacheManager,
+    cache::{CacheLoad, CacheManager},
     docs,
     error::AppError,
     metrics::Metrics,
@@ -209,13 +209,14 @@ async fn lookup_skin(
                 .map(|property| property.map(Arc::new))
         })
         .await
-        .map_err(|error| *error)?;
-    if result.was_hit() {
+        .map_err(|error| *error);
+    // A failed load was still a miss, so count it before returning the error.
+    if result.as_ref().is_ok_and(CacheLoad::was_hit) {
         state.metrics.increment_skin_cache_hits();
     } else {
         state.metrics.increment_skin_cache_misses();
     }
-    let property = result.into_value();
+    let property = result?.into_value();
 
     Ok(cacheable_json(
         property.is_some(),
