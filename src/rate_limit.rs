@@ -130,8 +130,10 @@ impl RateLimiter {
     }
 
     fn check(&self, key: IpAddr, now: Instant) -> Decision {
-        let shard_index = usize::try_from(self.shard_hasher.hash_one(key)).unwrap_or(usize::MAX)
-            % self.shards.len();
+        // Reduces the 64-bit hash before narrowing it, so 32-bit targets use every shard.
+        let shard_index =
+            usize::try_from(self.shard_hasher.hash_one(key) % RATE_LIMIT_SHARDS as u64)
+                .unwrap_or_default();
         let mut state = self.shards[shard_index]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
