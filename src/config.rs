@@ -5,7 +5,6 @@ use std::{
     ffi::OsString,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::PathBuf,
-    time::Duration,
 };
 
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
@@ -13,33 +12,6 @@ use reqwest::Url;
 use thiserror::Error;
 
 const DEFAULT_SERVER_PORT: u16 = 3000;
-const DEFAULT_BATCH_SIZE: usize = 10;
-const DEFAULT_BATCH_INTERVAL: Duration = Duration::from_secs(3);
-const DEFAULT_QUEUE_CAPACITY: usize = 1_024;
-const DEFAULT_MAX_IN_FLIGHT_BATCHES: usize = 16;
-
-#[derive(Debug, Clone)]
-pub struct MojangEndpoints {
-    pub batch_urls: Vec<Url>,
-    pub profile_base_url: Url,
-}
-
-impl MojangEndpoints {
-    fn production() -> Result<Self, ConfigError> {
-        Ok(Self {
-            batch_urls: [
-                "https://api.mojang.com/profiles/minecraft",
-                "https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname",
-            ]
-            .into_iter()
-            .map(Url::parse)
-            .collect::<Result<_, _>>()?,
-            profile_base_url: Url::parse(
-                "https://sessionserver.mojang.com/session/minecraft/profile/",
-            )?,
-        })
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -48,12 +20,6 @@ pub struct Config {
     pub discord_webhook: Option<Url>,
     /// Peers whose `CF-Connecting-IP` header is trusted as the client address.
     pub trusted_proxies: Vec<IpNet>,
-    pub endpoints: MojangEndpoints,
-    pub request_timeout: Duration,
-    pub batch_size: usize,
-    pub batch_interval: Duration,
-    pub queue_capacity: usize,
-    pub max_in_flight_batches: usize,
 }
 
 impl Config {
@@ -63,7 +29,7 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an error when a configured variable is invalid or a built-in endpoint is invalid.
+    /// Returns an error when a configured variable is invalid.
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_lookup(|name| env::var_os(name))
     }
@@ -105,12 +71,6 @@ impl Config {
             proxy_list_file,
             discord_webhook,
             trusted_proxies,
-            endpoints: MojangEndpoints::production()?,
-            request_timeout: Duration::from_secs(15),
-            batch_size: DEFAULT_BATCH_SIZE,
-            batch_interval: DEFAULT_BATCH_INTERVAL,
-            queue_capacity: DEFAULT_QUEUE_CAPACITY,
-            max_in_flight_batches: DEFAULT_MAX_IN_FLIGHT_BATCHES,
         })
     }
 }
@@ -178,8 +138,6 @@ pub enum ConfigError {
     InvalidDiscordWebhook,
     #[error("TRUSTED_PROXIES contains an invalid IP address or CIDR range: {value:?}")]
     InvalidTrustedProxy { value: String },
-    #[error("a built-in Mojang endpoint URL is invalid")]
-    InvalidEndpoint(#[from] url::ParseError),
 }
 
 #[cfg(test)]

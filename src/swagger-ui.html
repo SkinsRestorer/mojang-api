@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mojang API Proxy</title>
+    <link rel="stylesheet" type="text/css" href="./swagger-ui.css">
+    <link rel="icon" type="image/png" href="./favicon-32x32.png" sizes="32x32">
+    <link rel="icon" type="image/png" href="./favicon-16x16.png" sizes="16x16">
+    <style>
+      html {
+        box-sizing: border-box;
+        overflow-y: scroll;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: inherit;
+      }
+
+      body {
+        margin: 0;
+        background: #fafafa;
+      }
+
+      /* This API has no response links, so the column only repeats "No links". */
+      .swagger-ui .response-col_links {
+        display: none;
+      }
+
+      @media (max-width: 600px) {
+        .swagger-ui .wrapper {
+          padding: 0 12px;
+        }
+
+        .swagger-ui .info {
+          margin: 24px 0;
+        }
+
+        .swagger-ui .info .title {
+          font-size: 28px;
+        }
+
+        .swagger-ui .opblock .opblock-summary-path {
+          word-break: break-all;
+        }
+
+        /* Wide parameter and header tables scroll inside their section. */
+        .swagger-ui .table-container,
+        .swagger-ui .responses-inner {
+          overflow-x: auto;
+        }
+
+        .swagger-ui .responses-inner {
+          padding: 12px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="./swagger-ui-bundle.js" charset="UTF-8"></script>
+    <script src="./swagger-ui-standalone-preset.js" charset="UTF-8"></script>
+    <script src="./swagger-initializer.js" charset="UTF-8"></script>
+  </body>
+</html>

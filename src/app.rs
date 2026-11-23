@@ -1,13 +1,16 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
     extract::{Path, State, rejection::PathRejection},
-    http::{HeaderValue, Method, StatusCode, header::CACHE_CONTROL},
+    http::{
+        HeaderValue, Method, StatusCode,
+        header::{CACHE_CONTROL, X_CONTENT_TYPE_OPTIONS},
+    },
     middleware,
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use ipnet::IpNet;
@@ -18,20 +21,23 @@ use tower_http::{
     trace::TraceLayer,
 };
 use utoipa::OpenApi;
-use utoipa_swagger_ui::{Config as SwaggerConfig, SwaggerUi};
 
 use crate::{
     batch::BatchLookup,
     cache::CacheManager,
+    docs,
     error::AppError,
     metrics::Metrics,
     mojang::MojangService,
-    rate_limit::{RateLimitConfigError, RateLimiter, enforce_rate_limit},
-    types::{ErrorResponse, HealthResponse, SkinLookupResponse, SkinProperty, UuidLookupResponse},
+    rate_limit::{RateLimiter, enforce_rate_limit},
+    types::{
+        ErrorResponse, HealthResponse, HealthStatus, SkinLookupResponse, SkinProperty,
+        UuidLookupResponse,
+    },
     validation::{is_valid_minecraft_username, parse_minecraft_uuid},
 };
 
-const RATE_LIMIT: u32 = 1_000;
+const RATE_LIMIT: NonZeroU32 = NonZeroU32::new(1_000).unwrap();
 const RATE_LIMIT_WINDOW: Duration = Duration::from_mins(1);
 /// A last-resort deadline. Lookups normally fail sooner with a typed JSON error.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -60,6 +66,12 @@ pub struct AppState {
         title = "Mojang API Proxy",
         description = "Cached Minecraft username and skin lookups. Each client may send 1,000 requests per minute to `/mojang`, reported in `RateLimit-*` headers."
     ),
+    // The relative server targets whichever host serves this page. Production is listed for
+    // pages that embed this document from another site.
+    servers(
+        (url = "/", description = "This server"),
+        (url = "https://eclipse.skinsrestorer.net", description = "Production")
+    ),
     paths(lookup_uuid, lookup_skin, health),
     // Listed so that the Mojang endpoints appear above the health check.
     tags((name = "mojang"), (name = "health"))
@@ -69,30 +81,17 @@ struct ApiDoc;
 /// Builds the application router.
 ///
 /// `trusted_proxies` lists the peers whose `CF-Connecting-IP` header the rate limiter trusts.
-///
-/// # Errors
-///
-/// Returns an error when the built-in rate limiter configuration is invalid.
-pub fn build_router(
-    state: AppState,
-    trusted_proxies: Vec<IpNet>,
-) -> Result<Router, RateLimitConfigError> {
+pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
     let rate_limiter = Arc::new(RateLimiter::new(
         RATE_LIMIT,
         RATE_LIMIT_WINDOW,
         trusted_proxies,
-    )?);
+    ));
 
     let limited_routes = Router::new()
-        .route("/", get(|| async { Redirect::temporary("/swagger") }))
         .route("/mojang/uuid/{name}", get(lookup_uuid))
         .route("/mojang/skin/{uuid}", get(lookup_skin))
-        .merge(
-            SwaggerUi::new("/swagger")
-                .url("/openapi", ApiDoc::openapi())
-                // Every response already links its schema, so hide the duplicate list.
-                .config(SwaggerConfig::default().default_models_expand_depth(-1)),
-        )
+        .merge(docs::router(ApiDoc::openapi()))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
@@ -106,7 +105,7 @@ pub fn build_router(
 
     // The last layer runs first: CORS wraps the rate limiter, so 429 responses carry CORS
     // headers and preflight requests do not use up a client's quota.
-    Ok(unlimited_routes
+    unlimited_routes
         .merge(limited_routes)
         .with_state(state)
         .layer(TimeoutLayer::with_status_code(
@@ -119,7 +118,8 @@ pub fn build_router(
                 .allow_methods([Method::GET])
                 .allow_headers(Any),
         )
-        .layer(TraceLayer::new_for_http()))
+        .layer(middleware::map_response(set_nosniff))
+        .layer(TraceLayer::new_for_http())
 }
 
 #[utoipa::path(
@@ -133,13 +133,14 @@ pub fn build_router(
         (status = 429, description = "The client exceeded the rate limit", body = ErrorResponse,
             headers(("Retry-After" = u64, description = "Seconds to wait before retrying")),
             example = json!({"error": "RATE_LIMITED"})),
-        (status = 500, description = "The request to Mojang failed", body = ErrorResponse,
-            example = json!({"error": "INTERNAL_ERROR"})),
-        (status = 502, description = "Mojang returned an unexpected status", body = ErrorResponse,
-            example = json!({"error": "UPSTREAM_ERROR"})),
-        (status = 503, description = "Mojang timed out (`INTERNAL_TIMEOUT`), or is rate-limiting this service (`SERVICE_UNAVAILABLE`)", body = ErrorResponse,
+        (status = "5XX", description = "Mojang failed or is unavailable. The examples list each status and code.", body = ErrorResponse,
             headers(("Retry-After" = u64, description = "Seconds to wait before retrying, for `SERVICE_UNAVAILABLE`")),
-            example = json!({"error": "SERVICE_UNAVAILABLE"}))
+            examples(
+                ("500 INTERNAL_ERROR" = (summary = "500: the request to Mojang failed", value = json!({"error": "INTERNAL_ERROR"}))),
+                ("502 UPSTREAM_ERROR" = (summary = "502: Mojang returned an unexpected status", value = json!({"error": "UPSTREAM_ERROR"}))),
+                ("503 INTERNAL_TIMEOUT" = (summary = "503: Mojang timed out", value = json!({"error": "INTERNAL_TIMEOUT"}))),
+                ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service", value = json!({"error": "SERVICE_UNAVAILABLE"})))
+            ))
     ),
     tag = "mojang"
 )]
@@ -176,13 +177,14 @@ async fn lookup_uuid(
         (status = 429, description = "The client exceeded the rate limit", body = ErrorResponse,
             headers(("Retry-After" = u64, description = "Seconds to wait before retrying")),
             example = json!({"error": "RATE_LIMITED"})),
-        (status = 500, description = "The request to Mojang failed", body = ErrorResponse,
-            example = json!({"error": "INTERNAL_ERROR"})),
-        (status = 502, description = "Mojang returned an unexpected status", body = ErrorResponse,
-            example = json!({"error": "UPSTREAM_ERROR"})),
-        (status = 503, description = "Mojang timed out (`INTERNAL_TIMEOUT`), or is rate-limiting this service (`SERVICE_UNAVAILABLE`)", body = ErrorResponse,
+        (status = "5XX", description = "Mojang failed or is unavailable. The examples list each status and code.", body = ErrorResponse,
             headers(("Retry-After" = u64, description = "Seconds to wait before retrying, for `SERVICE_UNAVAILABLE`")),
-            example = json!({"error": "SERVICE_UNAVAILABLE"}))
+            examples(
+                ("500 INTERNAL_ERROR" = (summary = "500: the request to Mojang failed", value = json!({"error": "INTERNAL_ERROR"}))),
+                ("502 UPSTREAM_ERROR" = (summary = "502: Mojang returned an unexpected status", value = json!({"error": "UPSTREAM_ERROR"}))),
+                ("503 INTERNAL_TIMEOUT" = (summary = "503: Mojang timed out", value = json!({"error": "INTERNAL_TIMEOUT"}))),
+                ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service", value = json!({"error": "SERVICE_UNAVAILABLE"})))
+            ))
     ),
     tag = "mojang"
 )]
@@ -236,11 +238,18 @@ async fn lookup_skin(
 )]
 async fn health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     if state.batch_lookup.is_available() {
-        (StatusCode::OK, Json(HealthResponse { status: "UP" }))
+        (
+            StatusCode::OK,
+            Json(HealthResponse {
+                status: HealthStatus::Up,
+            }),
+        )
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(HealthResponse { status: "DOWN" }),
+            Json(HealthResponse {
+                status: HealthStatus::Down,
+            }),
         )
     }
 }
@@ -251,6 +260,14 @@ async fn not_found() -> AppError {
 
 async fn method_not_allowed() -> AppError {
     AppError::MethodNotAllowed
+}
+
+/// Stops browsers from treating JSON responses as another content type.
+async fn set_nosniff(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response
 }
 
 fn cacheable_json(exists: bool, value: impl Serialize) -> Response {
@@ -275,7 +292,10 @@ mod tests {
         body::{Body, to_bytes},
         http::{
             Method, Request, StatusCode,
-            header::{ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, ORIGIN, RETRY_AFTER},
+            header::{
+                ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, LOCATION, ORIGIN, RETRY_AFTER,
+                X_CONTENT_TYPE_OPTIONS,
+            },
         },
     };
     use serde_json::Value;
@@ -342,8 +362,7 @@ mod tests {
                 metrics,
             },
             Vec::new(),
-        )
-        .expect("test router configuration should be valid");
+        );
         (app, batch, uuid)
     }
 
@@ -469,6 +488,22 @@ mod tests {
         for route in ["/mojang/uuid/{name}", "/mojang/skin/{uuid}", "/health"] {
             assert!(paths.get(route).is_some_and(Value::is_object));
         }
+        let skin_responses = paths
+            .pointer("/~1mojang~1skin~1{uuid}/get/responses")
+            .and_then(Value::as_object)
+            .expect("skin responses should exist");
+        assert_eq!(
+            skin_responses
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["200", "400", "429", "5XX"]
+        );
+        assert_eq!(
+            document.pointer("/servers/0/url").and_then(Value::as_str),
+            Some("/"),
+            "the docs page should call the server that serves it"
+        );
 
         batch.shutdown().await;
     }
@@ -550,7 +585,7 @@ mod tests {
         };
         // The quota refills while the loop runs, so a few extra requests may pass.
         let mut limited = None;
-        for _ in 0..super::RATE_LIMIT * 2 {
+        for _ in 0..super::RATE_LIMIT.get() * 2 {
             let response = app
                 .clone()
                 .oneshot(request("/does-not-exist"))
@@ -612,5 +647,74 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body: Value = response_json(response).await;
         assert_eq!(body.get("status").and_then(Value::as_str), Some("DOWN"));
+    }
+
+    #[tokio::test]
+    async fn serves_mobile_friendly_docs_and_security_headers() {
+        let (app, batch, _) = test_app();
+
+        let health = app
+            .clone()
+            .oneshot(get("/health"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            health.headers().get(X_CONTENT_TYPE_OPTIONS),
+            Some(&"nosniff".parse().expect("header should parse")),
+            "routes outside the rate limiter also get nosniff"
+        );
+
+        let page = app
+            .clone()
+            .oneshot(get("/swagger/"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(page.status(), StatusCode::OK);
+        let html = to_bytes(page.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let html = String::from_utf8(html.to_vec()).expect("page should be UTF-8");
+        assert!(
+            html.contains(
+                r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#
+            ),
+            "phones need a viewport tag to use their own width"
+        );
+
+        let initializer = app
+            .clone()
+            .oneshot(get("/swagger/swagger-initializer.js"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(initializer.status(), StatusCode::OK);
+        let script = to_bytes(initializer.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let script = String::from_utf8(script.to_vec()).expect("script should be UTF-8");
+        assert!(script.contains(r#""url": "/openapi""#), "{script}");
+        assert!(script.contains(r#""layout": "BaseLayout""#), "{script}");
+
+        let favicon = app
+            .clone()
+            .oneshot(get("/favicon.ico"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(favicon.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            favicon.headers().get(LOCATION),
+            Some(
+                &"/swagger/favicon-32x32.png"
+                    .parse()
+                    .expect("header should parse")
+            )
+        );
+
+        let missing = app
+            .oneshot(get("/swagger/missing.js"))
+            .await
+            .expect("request should succeed");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        batch.shutdown().await;
     }
 }

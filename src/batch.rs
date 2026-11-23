@@ -29,6 +29,18 @@ pub struct BatchConfig {
     max_in_flight_batches: NonZeroUsize,
 }
 
+impl Default for BatchConfig {
+    /// Flushes full batches of 10 names, or any pending names every three seconds.
+    fn default() -> Self {
+        Self {
+            size: NonZeroUsize::new(MAX_BATCH_SIZE).unwrap_or(NonZeroUsize::MIN),
+            interval: Duration::from_secs(3),
+            queue_capacity: NonZeroUsize::new(1_024).unwrap_or(NonZeroUsize::MIN),
+            max_in_flight_batches: NonZeroUsize::new(16).unwrap_or(NonZeroUsize::MIN),
+        }
+    }
+}
+
 impl BatchConfig {
     /// Creates batching limits.
     ///

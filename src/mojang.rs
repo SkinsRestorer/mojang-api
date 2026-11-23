@@ -24,7 +24,6 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{
-    config::MojangEndpoints,
     error::ErrorChain,
     http_client::http_client_builder,
     metrics::Metrics,
@@ -33,6 +32,7 @@ use crate::{
 };
 
 const MAX_UPSTREAM_RESPONSE_BYTES: usize = 1024 * 1024;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Limits concurrent session server requests, so random UUIDs cannot flood Mojang.
 const MAX_CONCURRENT_SKIN_LOOKUPS: usize = 64;
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30);
@@ -90,6 +90,29 @@ impl Route {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MojangEndpoints {
+    batch_urls: Vec<Url>,
+    profile_base_url: Url,
+}
+
+impl MojangEndpoints {
+    #[expect(
+        clippy::expect_used,
+        reason = "The production endpoints are constant, valid URLs, which a test checks."
+    )]
+    fn production() -> Self {
+        let parse = |url| Url::parse(url).expect("production Mojang URLs are valid");
+        Self {
+            batch_urls: vec![
+                parse("https://api.mojang.com/profiles/minecraft"),
+                parse("https://api.minecraftservices.com/minecraft/profile/lookup/bulk/byname"),
+            ],
+            profile_base_url: parse("https://sessionserver.mojang.com/session/minecraft/profile/"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MojangHttpClient {
     routes: Vec<Route>,
@@ -106,16 +129,20 @@ impl MojangHttpClient {
     ///
     /// Returns an error when the proxy list cannot be read or an HTTP client cannot be built.
     pub fn new(
-        endpoints: MojangEndpoints,
         proxy_list_file: Option<&Path>,
-        timeout: Duration,
         metrics: Arc<Metrics>,
     ) -> Result<Self, ClientBuildError> {
         let proxies = proxy_list_file
             .map(load_proxy_list)
             .transpose()?
             .unwrap_or_default();
-        Self::build(endpoints, &proxies, timeout, metrics, true)
+        Self::build(
+            MojangEndpoints::production(),
+            &proxies,
+            REQUEST_TIMEOUT,
+            metrics,
+            true,
+        )
     }
 
     fn build(
@@ -125,10 +152,6 @@ impl MojangHttpClient {
         metrics: Arc<Metrics>,
         https_only: bool,
     ) -> Result<Self, ClientBuildError> {
-        if endpoints.batch_urls.is_empty() {
-            return Err(ClientBuildError::NoBatchEndpoints);
-        }
-
         let mut default_headers = HeaderMap::new();
         default_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         default_headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en"));
@@ -465,8 +488,6 @@ fn parse_proxy_url(value: &str) -> Result<Url, ProxyParseError> {
 
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
-    #[error("at least one Mojang batch endpoint is required")]
-    NoBatchEndpoints,
     #[error("could not build a Mojang HTTP client")]
     Build(#[from] reqwest::Error),
     #[error("could not read proxy list {path}")]
@@ -511,11 +532,11 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use crate::{config::MojangEndpoints, metrics::Metrics, types::SkinProperty};
+    use crate::{metrics::Metrics, types::SkinProperty};
 
     use super::{
-        MojangHttpClient, MojangService, ProxyParseError, UpstreamError, parse_proxy_url,
-        try_extend_body,
+        MojangEndpoints, MojangHttpClient, MojangService, ProxyParseError, UpstreamError,
+        parse_proxy_url, try_extend_body,
     };
 
     const PLAYER: &str = "b1ae07784817436c96a3a72c67cda060";
@@ -587,6 +608,16 @@ mod tests {
 
     fn uuid(value: &str) -> Uuid {
         Uuid::parse_str(value).expect("test UUID should parse")
+    }
+
+    #[test]
+    fn parses_production_endpoints() {
+        let endpoints = MojangEndpoints::production();
+        assert_eq!(endpoints.batch_urls.len(), 2);
+        assert_eq!(
+            endpoints.profile_base_url.host_str(),
+            Some("sessionserver.mojang.com")
+        );
     }
 
     #[tokio::test]

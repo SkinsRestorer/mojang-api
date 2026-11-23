@@ -44,9 +44,7 @@ fn start() -> Result<(), BoxError> {
     let metrics = Arc::new(Metrics::default());
     let cache = CacheManager::default();
     let mojang: Arc<dyn MojangService> = Arc::new(MojangHttpClient::new(
-        config.endpoints.clone(),
         config.proxy_list_file.as_deref(),
-        config.request_timeout,
         Arc::clone(&metrics),
     )?);
     tokio::runtime::Builder::new_multi_thread()
@@ -66,12 +64,7 @@ async fn run(
         Arc::clone(&mojang),
         cache.clone(),
         Arc::clone(&metrics),
-        BatchConfig::new(
-            config.batch_size,
-            config.batch_interval,
-            config.queue_capacity,
-            config.max_in_flight_batches,
-        )?,
+        BatchConfig::default(),
     );
     let reporter = DiscordReporter::start(config.discord_webhook.clone(), Arc::clone(&metrics));
     let app = build_router(
@@ -82,7 +75,7 @@ async fn run(
             metrics,
         },
         config.trusted_proxies.clone(),
-    )?;
+    );
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.server_port)).await?;
     info!(
         address = %listener.local_addr()?,

@@ -5,6 +5,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct UuidLookupResponse {
     pub exists: bool,
+    #[schema(example = "b1ae0778-4817-436c-96a3-a72c67cda060")]
     pub uuid: Option<Uuid>,
 }
 
@@ -17,7 +18,13 @@ pub struct SkinLookupResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SkinProperty {
+    /// Base64-encoded JSON with the texture URLs.
+    #[schema(
+        example = "eyJ0aW1lc3RhbXAiOjE3MDAwMDAwMDAwMDAsInByb2ZpbGVJZCI6ImIxYWUwNzc4NDgxNzQzNmM5NmEzYTcyYzY3Y2RhMDYwIiwicHJvZmlsZU5hbWUiOiJQaXN0b25tYXN0ZXIiLCJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvOGIzZjJjMWY2YzFmNGUxYjlhMmQ3YzVlNGYzYTJiMWMwZDllOGY3YTZiNWM0ZDNlMmYxYTBiOWM4ZDdlNmY1YSJ9fX0="
+    )]
     pub value: String,
+    /// Mojang's Base64-encoded signature of `value`. Real signatures are 684 characters.
+    #[schema(example = "U2lnbmVkIGJ5IE1vamFuZw==")]
     pub signature: String,
 }
 
@@ -65,5 +72,12 @@ pub(crate) struct MojangProperty {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct HealthResponse {
-    pub status: &'static str,
+    pub status: HealthStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "UPPERCASE")]
+pub(crate) enum HealthStatus {
+    Up,
+    Down,
 }

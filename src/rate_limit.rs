@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     net::{IpAddr, Ipv6Addr, SocketAddr},
+    num::NonZeroU32,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -9,15 +10,11 @@ use std::{
 use axum::{
     Json,
     extract::{ConnectInfo, Request, State},
-    http::{
-        HeaderMap, HeaderName, HeaderValue, StatusCode,
-        header::{RETRY_AFTER, X_CONTENT_TYPE_OPTIONS},
-    },
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use ipnet::IpNet;
-use thiserror::Error;
 
 use crate::{
     error::ceil_seconds,
@@ -67,34 +64,20 @@ struct Decision {
 }
 
 impl RateLimiter {
-    /// Creates an in-memory rate limiter.
+    /// Creates an in-memory rate limiter that allows `limit` requests per `window`.
     ///
     /// `trusted_proxies` lists the peers whose `CF-Connecting-IP` header identifies the client.
     /// Requests from other peers are limited by the peer address.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error when the limit or window is zero.
-    pub fn new(
-        limit: u32,
-        window: Duration,
-        trusted_proxies: Vec<IpNet>,
-    ) -> Result<Self, RateLimitConfigError> {
-        if limit == 0 {
-            return Err(RateLimitConfigError::ZeroLimit);
-        }
-        if window.is_zero() {
-            return Err(RateLimitConfigError::ZeroWindow);
-        }
-        let policy_header = HeaderValue::from_str(&format!("{limit};w={}", window.as_secs()))
-            .map_err(|error| {
-                tracing::error!(%error, "could not construct rate limit policy header");
-                RateLimitConfigError::InvalidPolicyHeader
-            })?;
-        let emission_interval = (window / limit).max(Duration::from_nanos(1));
+    /// Never in practice: the policy header contains only digits, `;`, and `w=`.
+    #[must_use]
+    pub fn new(limit: NonZeroU32, window: Duration, trusted_proxies: Vec<IpNet>) -> Self {
+        let emission_interval = (window / limit.get()).max(Duration::from_nanos(1));
         let now = Instant::now();
-        Ok(Self {
-            limit,
+        Self {
+            limit: limit.get(),
             window,
             emission_interval,
             burst_tolerance: window.saturating_sub(emission_interval),
@@ -107,9 +90,14 @@ impl RateLimiter {
                     })
                 })
                 .collect(),
-            limit_header: HeaderValue::from(limit),
-            policy_header,
-        })
+            limit_header: HeaderValue::from(limit.get()),
+            #[expect(
+                clippy::expect_used,
+                reason = "Digits, a semicolon, and `w=` are valid header characters."
+            )]
+            policy_header: HeaderValue::try_from(format!("{limit};w={}", window.as_secs()))
+                .expect("the rate limit policy is a valid header value"),
+        }
     }
 
     fn client_key(&self, peer: Option<IpAddr>, headers: &HeaderMap) -> IpAddr {
@@ -198,16 +186,6 @@ impl RateLimiter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum RateLimitConfigError {
-    #[error("rate limit must be greater than zero")]
-    ZeroLimit,
-    #[error("rate limit window must not be zero")]
-    ZeroWindow,
-    #[error("rate limit policy could not be represented as an HTTP header")]
-    InvalidPolicyHeader,
-}
-
 pub async fn enforce_rate_limit(
     State(rate_limiter): State<Arc<RateLimiter>>,
     request: Request,
@@ -239,7 +217,6 @@ pub async fn enforce_rate_limit(
         RATE_LIMIT_RESET,
         HeaderValue::from(ceil_seconds(decision.reset_after)),
     );
-    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     if !decision.allowed {
         headers.insert(
             RETRY_AFTER,
@@ -253,20 +230,20 @@ pub async fn enforce_rate_limit(
 mod tests {
     use std::{
         net::{IpAddr, Ipv4Addr},
+        num::NonZeroU32,
         time::{Duration, Instant},
     };
 
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{CF_CONNECTING_IP, MAX_CLIENTS_PER_SHARD, RateLimitConfigError, RateLimiter};
+    use super::{CF_CONNECTING_IP, MAX_CLIENTS_PER_SHARD, RateLimiter};
 
     fn limiter(limit: u32, window: Duration) -> RateLimiter {
         RateLimiter::new(
-            limit,
+            NonZeroU32::new(limit).expect("test limit should not be zero"),
             window,
             vec!["10.0.0.0/8".parse().expect("test network should parse")],
         )
-        .expect("test rate limiter configuration should be valid")
     }
 
     fn address(value: &str) -> IpAddr {
@@ -280,18 +257,6 @@ mod tests {
             HeaderValue::from_str(value).expect("test header should be valid"),
         );
         headers
-    }
-
-    #[test]
-    fn rejects_zero_rate_limit_configuration_values() {
-        assert!(matches!(
-            RateLimiter::new(0, Duration::from_secs(1), Vec::new()),
-            Err(RateLimitConfigError::ZeroLimit)
-        ));
-        assert!(matches!(
-            RateLimiter::new(1, Duration::ZERO, Vec::new()),
-            Err(RateLimitConfigError::ZeroWindow)
-        ));
     }
 
     #[test]
