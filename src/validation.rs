@@ -1,5 +1,3 @@
-#![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
-
 use uuid::Uuid;
 
 #[must_use]
@@ -13,21 +11,13 @@ pub fn is_valid_minecraft_username(username: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+/// Parses a UUID in the compact (32 hex digits) or dashed (8-4-4-4-12) form.
 #[must_use]
 pub fn parse_minecraft_uuid(value: &str) -> Option<Uuid> {
-    let valid_shape = match value.len() {
-        32 => value.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        36 => value.bytes().enumerate().all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        }),
-        _ => false,
-    };
-
-    valid_shape.then(|| Uuid::parse_str(value).ok()).flatten()
+    // `Uuid::try_parse` also accepts the braced and URN forms, which have other lengths.
+    matches!(value.len(), 32 | 36)
+        .then(|| Uuid::try_parse(value).ok())
+        .flatten()
 }
 
 #[cfg(test)]
@@ -65,5 +55,7 @@ mod tests {
         );
         assert!(parse_minecraft_uuid("urn:uuid:b1ae0778-4817-436c-96a3-a72c67cda060").is_none());
         assert!(parse_minecraft_uuid("b1ae07784-817-436c-96a3-a72c67cda060").is_none());
+        assert!(parse_minecraft_uuid("b1ae0778-4817-436c-96a3-a72c67cda06g").is_none());
+        assert!(parse_minecraft_uuid("+1ae07784817436c96a3a72c67cda060").is_none());
     }
 }
