@@ -516,11 +516,11 @@ pub enum ClientBuildError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 enum ProxyParseError {
-    #[error("expected ip:port or ip:port:user:password")]
+    #[error("expected host:port or host:port:user:password")]
     Format,
     #[error("proxy port is invalid")]
     Port(#[source] std::num::ParseIntError),
-    #[error("expected ip:port or ip:port:user:password")]
+    #[error("expected host:port or host:port:user:password")]
     Url(#[source] url::ParseError),
     #[error("proxy credentials are invalid")]
     Credentials,
