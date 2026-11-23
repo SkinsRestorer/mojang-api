@@ -29,6 +29,11 @@
         display: none;
       }
 
+      /* Every response is JSON, so the media type picker offers no choice. */
+      .swagger-ui .response-control-media-type {
+        display: none;
+      }
+
       @media (max-width: 600px) {
         .swagger-ui .wrapper {
           padding: 0 12px;
