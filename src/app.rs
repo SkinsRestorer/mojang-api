@@ -63,7 +63,7 @@ pub struct AppState {
 #[openapi(
     info(
         title = "Mojang API Proxy",
-        description = "Cached Minecraft username and skin lookups. Each client may send 1,000 requests per minute to `/mojang`, reported in `RateLimit-*` headers."
+        description = "Cached Minecraft username and skin lookups. Each client may send 1,000 requests per minute in total to every route except `/health`, reported in `RateLimit-*` headers."
     ),
     // The relative server targets whichever host serves this page. Production is listed for
     // pages that embed this document from another site.
@@ -141,7 +141,7 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
                 ("500 INTERNAL_ERROR" = (summary = "500: the request to Mojang failed", value = json!({"error": "INTERNAL_ERROR"}))),
                 ("502 UPSTREAM_ERROR" = (summary = "502: Mojang returned an unexpected status", value = json!({"error": "UPSTREAM_ERROR"}))),
                 ("503 INTERNAL_TIMEOUT" = (summary = "503: Mojang timed out", value = json!({"error": "INTERNAL_TIMEOUT"}))),
-                ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service", value = json!({"error": "SERVICE_UNAVAILABLE"})))
+                ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service, or this service is at capacity", value = json!({"error": "SERVICE_UNAVAILABLE"})))
             ))
     ),
     tag = "mojang"
@@ -184,7 +184,7 @@ async fn lookup_uuid(
                 ("500 INTERNAL_ERROR" = (summary = "500: the request to Mojang failed", value = json!({"error": "INTERNAL_ERROR"}))),
                 ("502 UPSTREAM_ERROR" = (summary = "502: Mojang returned an unexpected status", value = json!({"error": "UPSTREAM_ERROR"}))),
                 ("503 INTERNAL_TIMEOUT" = (summary = "503: Mojang timed out", value = json!({"error": "INTERNAL_TIMEOUT"}))),
-                ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service", value = json!({"error": "SERVICE_UNAVAILABLE"})))
+                ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service, or this service is at capacity", value = json!({"error": "SERVICE_UNAVAILABLE"})))
             ))
     ),
     tag = "mojang"
