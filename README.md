@@ -21,7 +21,7 @@ curl http://localhost:3000/mojang/uuid/Pistonmaster
 
 ## Configuration
 
-The service reads environment variables and loads a `.env` file from the working directory when one exists. Variables that are already set take precedence over `.env`. A variable set to an empty value counts as unset. When a value is invalid, the service stops at startup and names the variable. An invalid `RUST_LOG` is the exception: the service logs a warning and uses `info`.
+The service reads environment variables and loads the first `.env` file it finds in the working directory or its parents. Variables that are already set take precedence over `.env`. A variable set to an empty value counts as unset. When a value is invalid, the service stops at startup and names the variable. An invalid `RUST_LOG` is the exception: the service logs a warning and uses `info`.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -43,7 +43,7 @@ Passwords may contain additional colons. Invalid entries are logged and ignored.
 
 ### Client addresses and rate limits
 
-Each client may send 1,000 requests per minute to the Mojang and documentation endpoints. `/health` has no limit. The limiter identifies a client by the TCP peer address. When the peer is in `TRUSTED_PROXIES`, it uses the `CF-Connecting-IP` header instead. IPv6 clients share one limit per /64 prefix.
+Each client may send 1,000 requests per minute to the Mojang and documentation endpoints. `/health` has no limit. The limiter identifies a client by the TCP peer address. When the peer is in `TRUSTED_PROXIES`, it uses the `CF-Connecting-IP` header instead. IPv6 clients share one limit per /64 prefix. Responses from these endpoints include `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `RateLimit-Policy` headers, and CORS exposes them to browser scripts.
 
 The default trusts loopback and private peers, which fits a reverse proxy such as Traefik on the same host or network. That proxy passes `CF-Connecting-IP` through unchanged, so make sure the origin only accepts traffic from Cloudflare. Otherwise, a client that reaches the origin directly can set the header to any address.
 
@@ -120,15 +120,15 @@ Set production configuration variables in the deployment environment.
 ## Run the published image
 
 Pushes to `main` build a release image with Railpack and publish it to
-`ghcr.io/skinsrestorer/mojang-api`. Each build publishes three tags:
+`ghcr.io/skinsrestorer/mojang-api` with these tags:
 
 - `latest`: the latest published build from `main`
 - `main`: the latest published build from `main`
 - `sha-<12-character-commit-sha>`: the build for a specific commit
 
-The workflow runs only after the build, test, and lint jobs pass for the same commit.
-It builds on the `ubuntu-26.04` and `ubuntu-26.04-arm` runners and authenticates
-with `GITHUB_TOKEN`, with `packages: write` permission.
+The workflow builds images only after the build, test, and lint jobs pass for the same
+commit. Each tag is a multi-architecture image for `amd64` and `arm64`. After it publishes
+the image, the workflow calls the Dokploy webhook in the `DOKPLOY_WEBHOOK_URL` secret to deploy it.
 
 Run the published image:
 
@@ -138,17 +138,6 @@ docker run -d --name mojang-api --restart unless-stopped \
 ```
 
 The service is available at `http://localhost:3000`.
-
-## Development checks
-
-Run the same checks used by CI:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --all-targets --locked
-cargo build --release --locked
-```
 
 ## Architecture
 
