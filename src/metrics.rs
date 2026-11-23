@@ -22,7 +22,6 @@ pub struct Metrics {
 
 impl Default for Metrics {
     fn default() -> Self {
-        let now = Instant::now();
         Self {
             uuid_requests: AtomicU64::new(0),
             skin_requests: AtomicU64::new(0),
@@ -36,7 +35,7 @@ impl Default for Metrics {
             bytes_received_from_mojang: AtomicU64::new(0),
             mojang_requests: AtomicU64::new(0),
             mojang_errors: AtomicU64::new(0),
-            started_at: now,
+            started_at: Instant::now(),
         }
     }
 }
@@ -89,7 +88,6 @@ impl Metrics {
 
     #[must_use]
     pub fn snapshot(&self) -> MetricsSnapshot {
-        let now = Instant::now();
         MetricsSnapshot {
             uuid_requests: self.uuid_requests.load(Ordering::Relaxed),
             skin_requests: self.skin_requests.load(Ordering::Relaxed),
@@ -103,8 +101,7 @@ impl Metrics {
             bytes_received_from_mojang: self.bytes_received_from_mojang.load(Ordering::Relaxed),
             mojang_requests: self.mojang_requests.load(Ordering::Relaxed),
             mojang_errors: self.mojang_errors.load(Ordering::Relaxed),
-            uptime: now.saturating_duration_since(self.started_at),
-            report_period: Duration::ZERO,
+            uptime: self.started_at.elapsed(),
         }
     }
 }
@@ -124,12 +121,12 @@ pub struct MetricsSnapshot {
     pub mojang_requests: u64,
     pub mojang_errors: u64,
     pub uptime: Duration,
-    pub report_period: Duration,
 }
 
 impl MetricsSnapshot {
+    /// Returns the counter increases since `previous`, keeping the current uptime.
     #[must_use]
-    pub fn since(self, previous: Self, report_period: Duration) -> Self {
+    pub fn since(self, previous: Self) -> Self {
         Self {
             uuid_requests: self.uuid_requests.saturating_sub(previous.uuid_requests),
             skin_requests: self.skin_requests.saturating_sub(previous.skin_requests),
@@ -162,15 +159,12 @@ impl MetricsSnapshot {
                 .saturating_sub(previous.mojang_requests),
             mojang_errors: self.mojang_errors.saturating_sub(previous.mojang_errors),
             uptime: self.uptime,
-            report_period,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::Metrics;
 
     #[test]
@@ -183,14 +177,13 @@ mod tests {
         metrics.record_mojang_response(34);
 
         let current = metrics.snapshot();
-        let window = current.since(baseline, Duration::from_mins(5));
+        let window = current.since(baseline);
 
         assert_eq!(window.uuid_requests, 1);
         assert_eq!(window.uuid_cache_misses, 1);
         assert_eq!(window.mojang_requests, 1);
         assert_eq!(window.bytes_sent_to_mojang, 12);
         assert_eq!(window.bytes_received_from_mojang, 34);
-        assert_eq!(window.report_period, Duration::from_mins(5));
         assert_eq!(metrics.snapshot().uuid_requests, 1);
     }
 }

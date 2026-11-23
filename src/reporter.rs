@@ -27,29 +27,34 @@ pub struct DiscordReporter {
 }
 
 impl DiscordReporter {
+    const fn disabled() -> Self {
+        Self {
+            shutdown: None,
+            task: None,
+        }
+    }
+
     pub fn start(webhook: Option<Url>, metrics: Arc<Metrics>) -> Self {
         let Some(webhook) = webhook else {
             info!("DISCORD_WEBHOOK is not set; status reports are disabled");
-            return Self {
-                shutdown: None,
-                task: None,
-            };
+            return Self::disabled();
+        };
+
+        let client = match http_client_builder(Duration::from_secs(15))
+            .https_only(true)
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                error!(error = %ErrorChain(&error), "could not create Discord HTTP client; status reports are disabled");
+                return Self::disabled();
+            }
         };
 
         let (shutdown, mut shutdown_receiver) = oneshot::channel();
         let initial_snapshot = metrics.snapshot();
         let reporter_started_at = Instant::now();
         let task = tokio::spawn(async move {
-            let client = match http_client_builder(Duration::from_secs(15))
-                .https_only(true)
-                .build()
-            {
-                Ok(client) => client,
-                Err(error) => {
-                    error!(%error, "could not create Discord HTTP client");
-                    return;
-                }
-            };
             let mut ticker = interval(REPORT_INTERVAL);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             ticker.tick().await;
@@ -63,11 +68,9 @@ impl DiscordReporter {
                     _ = ticker.tick() => {
                         let now = Instant::now();
                         let current_snapshot = metrics.snapshot();
-                        let snapshot = current_snapshot.since(
-                            last_successful_snapshot,
-                            now.saturating_duration_since(last_successful_report_at),
-                        );
-                        let payload = match tokio::task::spawn_blocking(move || build_report(snapshot)).await {
+                        let snapshot = current_snapshot.since(last_successful_snapshot);
+                        let report_period = now.saturating_duration_since(last_successful_report_at);
+                        let payload = match tokio::task::spawn_blocking(move || build_report(snapshot, report_period)).await {
                             Ok(payload) => payload,
                             Err(error) => {
                                 error!(%error, "failed to build Discord status report");
@@ -136,7 +139,7 @@ async fn send_report(
     clippy::cast_precision_loss,
     reason = "report percentages and rates are rounded for display"
 )]
-fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
+fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_json::Value {
     let total_requests = snapshot
         .uuid_requests
         .saturating_add(snapshot.skin_requests);
@@ -155,10 +158,10 @@ fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
             total_cache_hits as f64 / total_cache_lookups as f64 * 100.0
         )
     };
-    let requests_per_minute = if snapshot.report_period.is_zero() {
+    let requests_per_minute = if report_period.is_zero() {
         0.0
     } else {
-        total_requests as f64 / snapshot.report_period.as_secs_f64() * 60.0
+        total_requests as f64 / report_period.as_secs_f64() * 60.0
     };
     let color = match snapshot.mojang_errors {
         0 => 0x002e_cc71,
@@ -167,9 +170,9 @@ fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
     };
     let rss = process_rss_bytes().map_or_else(|| "Unavailable".to_owned(), format_bytes);
     let load_average = load_average().unwrap_or_else(|| "Unavailable".to_owned());
-    let report_period = format_report_period(snapshot.report_period);
+    let report_period = format_report_period(report_period);
 
-    let payload = json!({
+    json!({
         "embeds": [{
             "title": "Mojang API Proxy - Status Report",
             "color": color,
@@ -230,9 +233,7 @@ fn build_report(snapshot: MetricsSnapshot) -> serde_json::Value {
             "timestamp": jiff::Timestamp::now().to_string(),
             "footer": { "text": format!("SRMojangAPI v{}", env!("CARGO_PKG_VERSION")) }
         }]
-    });
-
-    payload
+    })
 }
 
 #[expect(
@@ -331,7 +332,49 @@ fn load_average() -> Option<String> {
 mod tests {
     use std::time::Duration;
 
-    use super::{format_bytes, format_duration, format_number, format_report_period};
+    use super::{build_report, format_bytes, format_duration, format_number, format_report_period};
+    use crate::metrics::MetricsSnapshot;
+
+    fn field_value<'a>(report: &'a serde_json::Value, name: &str) -> &'a str {
+        report["embeds"][0]["fields"]
+            .as_array()
+            .and_then(|fields| fields.iter().find(|field| field["name"] == name))
+            .and_then(|field| field["value"].as_str())
+            .unwrap_or_else(|| panic!("missing report field {name}"))
+    }
+
+    #[test]
+    fn reports_window_counters_over_the_report_period() {
+        let snapshot = MetricsSnapshot {
+            uuid_requests: 1_200,
+            skin_requests: 300,
+            uuid_cache_hits: 3,
+            uuid_cache_misses: 1,
+            batches_processed: 4,
+            usernames_batched: 10,
+            mojang_errors: 2,
+            ..MetricsSnapshot::default()
+        };
+
+        let report = build_report(snapshot, Duration::from_mins(10));
+
+        assert_eq!(
+            field_value(&report, "Requests (10min)"),
+            "**Total:** 1,500\n**UUID Lookups:** 1,200\n**Skin Lookups:** 300\n**Req/min:** 150.0"
+        );
+        assert!(field_value(&report, "Cache (10min)").contains("**Hit Rate:** 75.0%"));
+        assert!(field_value(&report, "Batching (10min)").ends_with("**Avg Size:** 2.5"));
+        assert_eq!(report["embeds"][0]["color"], 0x00f3_9c12);
+    }
+
+    #[test]
+    fn reports_empty_windows_without_rates() {
+        let report = build_report(MetricsSnapshot::default(), Duration::from_mins(5));
+
+        assert!(field_value(&report, "Cache (5min)").contains("**Hit Rate:** N/A"));
+        assert!(field_value(&report, "Batching (5min)").ends_with("**Avg Size:** N/A"));
+        assert_eq!(report["embeds"][0]["color"], 0x002e_cc71);
+    }
 
     #[test]
     fn formats_report_values() {
