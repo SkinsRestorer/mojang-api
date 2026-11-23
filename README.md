@@ -29,7 +29,7 @@ The service reads environment variables and loads the first `.env` file it finds
 | `PORT` | No | `3000` | TCP port used by the HTTP server and hosting platforms |
 | `PROXY_LIST_FILE` | No | Direct connection | File containing outbound HTTP proxies |
 | `DISCORD_WEBHOOK` | No | Disabled | `https://` Discord webhook that receives five-minute status reports |
-| `TRUSTED_PROXIES` | No | Loopback and private ranges | Comma-separated IP addresses or CIDR ranges whose `CF-Connecting-IP` header is trusted, or `none` |
+| `TRUSTED_PROXIES` | No | Loopback, private ranges, and `100.64.0.0/10` | Comma-separated IP addresses or CIDR ranges whose `CF-Connecting-IP` header is trusted, or `none`. A list with no entries is an error. The server logs the effective list at startup. |
 | `RUST_LOG` | No | `info` | Logging filter used by `tracing` |
 
 Each non-empty line in the proxy file must use one of these formats:

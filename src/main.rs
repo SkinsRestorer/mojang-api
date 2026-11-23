@@ -41,6 +41,7 @@ fn main() -> ExitCode {
 
 fn start() -> Result<(), BoxError> {
     let config = Config::from_env()?;
+    log_trusted_proxies(&config);
     let metrics = Arc::new(Metrics::default());
     let cache = CacheManager::default();
     let mojang: Arc<dyn MojangService> = Arc::new(MojangHttpClient::new(
@@ -104,6 +105,20 @@ async fn run(
             Err("received a second shutdown signal; stopping without draining".into())
         }
     }
+}
+
+fn log_trusted_proxies(config: &Config) {
+    let trusted_proxies = if config.trusted_proxies.is_empty() {
+        "none".to_owned()
+    } else {
+        config
+            .trusted_proxies
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    info!(%trusted_proxies, "trusting CF-Connecting-IP from these peers");
 }
 
 /// Counts shutdown signals, so a second signal can force an immediate exit.

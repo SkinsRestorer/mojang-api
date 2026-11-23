@@ -106,7 +106,7 @@ fn parse_trusted_proxies(value: &str) -> Result<Vec<IpNet>, ConfigError> {
     if value.eq_ignore_ascii_case("none") {
         return Ok(Vec::new());
     }
-    value
+    let networks = value
         .split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
@@ -114,15 +114,35 @@ fn parse_trusted_proxies(value: &str) -> Result<Vec<IpNet>, ConfigError> {
             entry
                 .parse::<IpNet>()
                 .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
-                .map(|network| network.trunc())
+                .map(|network| unmap_ipv4(network).trunc())
                 .map_err(|_error| ConfigError::InvalidTrustedProxy {
                     value: entry.to_owned(),
                 })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    // A list of separators would otherwise trust no peer, which only `none` should do.
+    if networks.is_empty() {
+        return Err(ConfigError::EmptyTrustedProxies);
+    }
+    Ok(networks)
 }
 
-/// Loopback and private ranges, which covers a reverse proxy on the same host or network.
+/// Converts an IPv4-mapped IPv6 range, such as `::ffff:10.0.0.0/104`, to its IPv4 range.
+///
+/// The rate limiter compares canonical peer addresses, so a mapped peer is always an
+/// IPv4 address and would never match the IPv6 form.
+fn unmap_ipv4(network: IpNet) -> IpNet {
+    let IpNet::V6(v6) = network else {
+        return network;
+    };
+    match (v6.addr().to_ipv4_mapped(), v6.prefix_len().checked_sub(96)) {
+        (Some(address), Some(prefix)) => Ipv4Net::new(address, prefix).map_or(network, IpNet::V4),
+        _ => network,
+    }
+}
+
+/// Loopback, private, and shared address ranges, which covers a reverse proxy on the same
+/// host or network, including platforms that use the CGNAT range `100.64.0.0/10`.
 fn default_trusted_proxies() -> Vec<IpNet> {
     let v4 = |address: Ipv4Addr, prefix| Ipv4Net::new_assert(address, prefix).into();
     let v6 = |address: Ipv6Addr, prefix| Ipv6Net::new_assert(address, prefix).into();
@@ -131,6 +151,7 @@ fn default_trusted_proxies() -> Vec<IpNet> {
         v4(Ipv4Addr::new(10, 0, 0, 0), 8),
         v4(Ipv4Addr::new(172, 16, 0, 0), 12),
         v4(Ipv4Addr::new(192, 168, 0, 0), 16),
+        v4(Ipv4Addr::new(100, 64, 0, 0), 10),
         v6(Ipv6Addr::LOCALHOST, 128),
         v6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
     ]
@@ -146,6 +167,8 @@ pub enum ConfigError {
     InvalidDiscordWebhook,
     #[error("TRUSTED_PROXIES contains an invalid IP address or CIDR range: {value:?}")]
     InvalidTrustedProxy { value: String },
+    #[error("TRUSTED_PROXIES contains no IP address or CIDR range; use \"none\" to trust no peer")]
+    EmptyTrustedProxies,
 }
 
 #[cfg(test)]
@@ -191,6 +214,16 @@ mod tests {
             );
             assert!(trusts(&config, "10.1.2.3"), "private peers are trusted");
             assert!(trusts(&config, "::1"), "loopback is trusted");
+            assert!(
+                trusts(&config, "100.64.0.1"),
+                "shared address space is trusted"
+            );
+            assert!(
+                trusts(&config, "100.127.255.254"),
+                "shared address space is trusted"
+            );
+            assert!(!trusts(&config, "100.128.0.1"), "100.128.0.0 is public");
+            assert!(!trusts(&config, "169.254.1.1"), "link-local is not trusted");
             assert!(!trusts(&config, "203.0.113.7"), "public peers are not");
         }
     }
@@ -253,6 +286,38 @@ mod tests {
             load(&[("TRUSTED_PROXIES", "10.0.0.0/8,proxy")]),
             Err(ConfigError::InvalidTrustedProxy { value }) if value == "proxy"
         ));
+    }
+
+    #[test]
+    fn rejects_trusted_proxy_lists_without_entries() {
+        for value in [",", " , ", ",,\t,"] {
+            let Err(error) = load(&[("TRUSTED_PROXIES", value)]) else {
+                panic!("TRUSTED_PROXIES={value:?} should be rejected");
+            };
+            assert_eq!(
+                error.to_string(),
+                "TRUSTED_PROXIES contains no IP address or CIDR range; use \"none\" to trust no peer"
+            );
+        }
+    }
+
+    #[test]
+    fn converts_ipv4_mapped_trusted_proxies_to_ipv4() {
+        let config = load(&[(
+            "TRUSTED_PROXIES",
+            "::ffff:198.51.100.0/120, ::ffff:192.0.2.1",
+        )])
+        .expect("mapped addresses should parse");
+        assert!(trusts(&config, "198.51.100.200"), "mapped range is trusted");
+        assert!(trusts(&config, "192.0.2.1"), "mapped address is trusted");
+        assert!(!trusts(&config, "192.0.2.2"), "other addresses are not");
+        assert_eq!(
+            config.trusted_proxies,
+            [
+                "198.51.100.0/24".parse().expect("range should parse"),
+                "192.0.2.1/32".parse().expect("range should parse"),
+            ]
+        );
     }
 
     #[test]
