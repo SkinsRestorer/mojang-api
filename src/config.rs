@@ -93,9 +93,10 @@ fn parse_port(name: &'static str, value: &str) -> Result<u16, ConfigError> {
 
 fn parse_discord_webhook(value: &str) -> Result<Url, ConfigError> {
     // The webhook URL contains a secret token, so errors never include the value.
+    // `https` URLs always have a host, because parsing rejects an empty one.
     Url::parse(value)
         .ok()
-        .filter(|url| url.scheme() == "https" && url.host().is_some())
+        .filter(|url| url.scheme() == "https")
         .ok_or(ConfigError::InvalidDiscordWebhook)
 }
 
@@ -215,7 +216,11 @@ mod tests {
 
     #[test]
     fn requires_an_https_discord_webhook() {
-        for value in ["http://discord.example/api/webhooks/1/token", "not a url"] {
+        for value in [
+            "http://discord.example/api/webhooks/1/token",
+            "https://",
+            "not a url",
+        ] {
             assert!(matches!(
                 load(&[("DISCORD_WEBHOOK", value)]),
                 Err(ConfigError::InvalidDiscordWebhook)
