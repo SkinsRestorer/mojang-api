@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{BuildHasher, RandomState},
     net::{IpAddr, Ipv6Addr, SocketAddr},
     num::NonZeroU32,
     sync::{Arc, Mutex},
@@ -38,11 +38,12 @@ const MIN_FULL_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 /// Unlike a fixed window, a client cannot send twice the limit across a window boundary.
 #[derive(Debug)]
 pub struct RateLimiter {
-    limit: u32,
     window: Duration,
     emission_interval: Duration,
     burst_tolerance: Duration,
     trusted_proxies: Vec<IpNet>,
+    /// Seeds shard selection randomly, so clients cannot choose addresses that share a shard.
+    shard_hasher: RandomState,
     shards: Box<[Mutex<RateLimiterState>]>,
     limit_header: HeaderValue,
     policy_header: HeaderValue,
@@ -77,11 +78,13 @@ impl RateLimiter {
         let emission_interval = (window / limit.get()).max(Duration::from_nanos(1));
         let now = Instant::now();
         Self {
-            limit: limit.get(),
             window,
             emission_interval,
-            burst_tolerance: window.saturating_sub(emission_interval),
+            // Derived from the rounded interval, so a window that is not a whole number of
+            // intervals cannot admit an extra request.
+            burst_tolerance: emission_interval.saturating_mul(limit.get() - 1),
             trusted_proxies,
+            shard_hasher: RandomState::new(),
             shards: (0..RATE_LIMIT_SHARDS)
                 .map(|_| {
                     Mutex::new(RateLimiterState {
@@ -127,10 +130,8 @@ impl RateLimiter {
     }
 
     fn check(&self, key: IpAddr, now: Instant) -> Decision {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let shard_index =
-            usize::try_from(hasher.finish()).unwrap_or(usize::MAX) % self.shards.len();
+        let shard_index = usize::try_from(self.shard_hasher.hash_one(key)).unwrap_or(usize::MAX)
+            % self.shards.len();
         let mut state = self.shards[shard_index]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -175,11 +176,14 @@ impl RateLimiter {
         drop(state);
 
         let backlog = next_arrival.saturating_duration_since(now);
-        let remaining =
-            self.window.saturating_sub(backlog).as_nanos() / self.emission_interval.as_nanos();
+        // The next request is allowed while its backlog stays within the burst tolerance.
+        let remaining = (self.burst_tolerance + self.emission_interval)
+            .saturating_sub(backlog)
+            .as_nanos()
+            / self.emission_interval.as_nanos();
         Decision {
             allowed: true,
-            remaining: u32::try_from(remaining).unwrap_or(u32::MAX).min(self.limit),
+            remaining: u32::try_from(remaining).unwrap_or(u32::MAX),
             reset_after: backlog,
             retry_after: Duration::ZERO,
         }
@@ -312,6 +316,26 @@ mod tests {
         let refill = before_boundary + Duration::from_secs(6);
         assert!(limiter.check(client, refill).allowed, "one request refills");
         assert!(!limiter.check(client, refill).allowed, "only one refills");
+    }
+
+    #[test]
+    fn allows_exactly_the_limit_when_the_window_is_not_a_whole_number_of_intervals() {
+        // 11 ns / 4 rounds the interval down to 2 ns.
+        let limiter = limiter(4, Duration::from_nanos(11));
+        let client = address("192.0.2.1");
+        let now = Instant::now();
+        let remaining: Vec<u32> = (0..4)
+            .map(|_| {
+                let decision = limiter.check(client, now);
+                assert!(decision.allowed, "requests within the limit are allowed");
+                decision.remaining
+            })
+            .collect();
+        assert_eq!(remaining, [3, 2, 1, 0]);
+        assert!(
+            !limiter.check(client, now).allowed,
+            "the fifth request is rejected"
+        );
     }
 
     #[test]
