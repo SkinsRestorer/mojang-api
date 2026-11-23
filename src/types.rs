@@ -67,13 +67,3 @@ pub(crate) struct MojangProperty {
 pub(crate) struct HealthResponse {
     pub status: &'static str,
 }
-
-#[derive(Debug, Serialize)]
-pub(crate) struct NotFoundResponse {
-    pub error: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RateLimitResponse {
-    pub error: &'static str,
-}
