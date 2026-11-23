@@ -5,10 +5,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::Path,
-    http::{
-        HeaderValue,
-        header::{CONTENT_ENCODING, CONTENT_TYPE},
-    },
+    http::{HeaderValue, header::CONTENT_TYPE},
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
@@ -64,12 +61,8 @@ fn swagger_asset(file: &str, config: Arc<Config<'static>>) -> Response {
     match utoipa_swagger_ui::serve(file, config) {
         Ok(Some(asset)) => {
             let mut response = asset.bytes.into_owned().into_response();
-            let headers = response.headers_mut();
             if let Ok(content_type) = HeaderValue::from_str(&asset.content_type) {
-                headers.insert(CONTENT_TYPE, content_type);
-            }
-            if asset.gzpipped {
-                headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+                response.headers_mut().insert(CONTENT_TYPE, content_type);
             }
             response
         }
