@@ -136,8 +136,10 @@ Run the published image:
 
 ```bash
 docker run -d --name mojang-api --restart unless-stopped \
-  -p 3000:3000 ghcr.io/skinsrestorer/mojang-api:latest
+  --stop-timeout 60 -p 3000:3000 ghcr.io/skinsrestorer/mojang-api:latest
 ```
+
+Docker sends `SIGKILL` 10 seconds after `SIGTERM` by default. `--stop-timeout 60` gives the service time to drain requests and batches during shutdown. Give other orchestrators, such as Dokploy, the same stop grace period.
 
 The service is available at `http://localhost:3000`. Pass configuration with `-e NAME=value` or `--env-file`. To use a proxy list, mount the file into the container and set `PROXY_LIST_FILE` to its path inside the container.
 
