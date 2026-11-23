@@ -529,7 +529,7 @@ mod tests {
     use axum::{
         Json, Router,
         extract::{Path, State},
-        http::{StatusCode, header::RETRY_AFTER},
+        http::{StatusCode, Uri, header::RETRY_AFTER},
         response::{IntoResponse, Response},
         routing::{get, post},
         serve::ListenerExt,
@@ -552,15 +552,18 @@ mod tests {
     const BROKEN: &str = "00000000000000000000000000000500";
     const UNSIGNED: &str = "000000000000000000000000000000aa";
 
-    async fn profile(Path(uuid): Path<String>) -> Response {
+    /// Like Mojang, signs the textures only when the request asks for `unsigned=false`.
+    async fn profile(Path(uuid): Path<String>, uri: Uri) -> Response {
+        let textures = if uri.query() == Some("unsigned=false") {
+            json!({ "name": "textures", "value": "texture", "signature": "signature" })
+        } else {
+            json!({ "name": "textures", "value": "texture" })
+        };
         match uuid.as_str() {
             PLAYER => Json(json!({
                 "id": PLAYER,
                 "name": "Pistonmaster",
-                "properties": [
-                    { "name": "extra", "value": "unsigned" },
-                    { "name": "textures", "value": "texture", "signature": "signature" }
-                ]
+                "properties": [{ "name": "extra", "value": "unsigned" }, textures]
             }))
             .into_response(),
             MISSING => StatusCode::NO_CONTENT.into_response(),
@@ -574,11 +577,20 @@ mod tests {
         }
     }
 
-    async fn bulk() -> Json<serde_json::Value> {
-        Json(json!([
-            { "id": PLAYER, "name": "Pistonmaster" },
-            { "id": "not-a-uuid", "name": "Broken" }
-        ]))
+    /// Answers only for the requested names, which must arrive as a JSON array.
+    async fn bulk(Json(names): Json<Vec<String>>) -> Json<serde_json::Value> {
+        let profiles = [(PLAYER, "Pistonmaster"), ("not-a-uuid", "Broken")];
+        Json(
+            profiles
+                .into_iter()
+                .filter(|(_, profile_name)| {
+                    names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(profile_name))
+                })
+                .map(|(id, name)| json!({ "id": id, "name": name }))
+                .collect(),
+        )
     }
 
     async fn rate_limited(State(hits): State<Arc<AtomicUsize>>) -> Response {
