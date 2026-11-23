@@ -39,7 +39,7 @@ host:port
 host:port:username:password
 ```
 
-Passwords may contain additional colons. Invalid entries are logged and ignored. If the configured file cannot be read, the service does not start. If the file has no valid entries, the service logs a warning and uses direct connections.
+An entry may start with `http://`. Write IPv6 hosts in brackets, for example `[::1]:8080` or `[::1]:8080:username:password`. Passwords may contain additional colons. Port 0 is invalid. Invalid entries are logged and ignored. If the configured file cannot be read, the service does not start. If the file has no valid entries, the service logs a warning and uses direct connections.
 
 ### Client addresses and rate limits
 
@@ -157,7 +157,7 @@ A username lookup fails with `503` when the batch queue is full or when its batc
 
 Moka stores up to 100,000 username entries and uses a 32 MiB weighted budget for skin entries. Usernames expire after six hours and skins after one hour, because players can change skins at any time. Negative results expire after 15 minutes so newly created profiles and skins become visible sooner. A request counts as a cache hit only when the value was already cached.
 
-Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 4-second timeout and reject response bodies larger than 1 MiB. Each configured proxy has its own HTTP client, and each request picks a random proxy. When Mojang answers `429`, the service stops using that proxy for that Mojang API until the `Retry-After` delay passes (30 seconds by default), and retries the request once through another proxy if at least 2 seconds of a 5-second budget remain. The retry gets only the rest of that budget. At most 64 skin lookups run at the same time.
+Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 4-second timeout and reject response bodies larger than 1 MiB. Each configured proxy has its own HTTP client, and each request picks a random proxy. When Mojang answers `429`, the service stops using that proxy for that Mojang host until the `Retry-After` delay passes (30 seconds by default), and retries the request once through another proxy if at least 2 seconds of a 5-second budget remain. The retry gets only the rest of that budget. Mojang limits the two username batch hosts separately, so a username lookup prefers a batch host that has not rate-limited the chosen proxy. When the service cannot connect through a proxy, it retries the request the same way through another available proxy and sends no traffic through the failed proxy for 30 seconds, unless no other proxy is available. Logs identify a route by its `route` index, which is the position of the proxy among the valid entries, starting at 0, or 0 for the direct connection. Logs never show proxy addresses or credentials. At most 64 skin lookups run at the same time.
 
 The timeouts fit the SkinsRestorer plugin, which stops waiting after 5 seconds. A skin lookup finishes or fails within the 5-second Mojang budget. A username lookup can also wait up to one second for its batch. The 7-second lookup deadline and the 8-second request deadline only catch work that is stuck, such as batches that wait for a free batch slot.
 

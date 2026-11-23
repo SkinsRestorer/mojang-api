@@ -3,6 +3,7 @@
 use std::{
     collections::HashSet,
     fs,
+    num::NonZeroU16,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -43,7 +44,9 @@ const MIN_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_SKIN_LOOKUPS: usize = 64;
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_mins(10);
-/// A rate-limited request is retried once through another outbound route, if
+/// How long a route that could not connect receives no traffic while other routes work.
+const UNREACHABLE_ROUTE_COOLDOWN: Duration = Duration::from_secs(30);
+/// A rate-limited or unreachable request is retried once through another outbound route, if
 /// [`retry_timeout`] allows it.
 const MAX_ATTEMPTS: usize = 2;
 
@@ -73,37 +76,65 @@ pub trait MojangService: Send + Sync {
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError>;
 }
 
-/// Mojang rate-limits each API separately, so cooldowns are tracked per API.
-#[derive(Debug, Clone, Copy)]
-enum Api {
-    Batch,
-    Profile,
-}
-
 /// One outbound path to Mojang: a direct connection or a single proxy.
 ///
 /// Each route has its own client because pooled connections stay bound to the proxy that
-/// opened them.
+/// opened them. Logs name a route by its index (the direct connection or the proxy's
+/// position among the valid entries), never by its URL, which can contain credentials.
 #[derive(Debug)]
 struct Route {
     client: Client,
-    /// For each API, milliseconds after `MojangHttpClient::epoch` until the route may be used.
-    cooldown_until: [AtomicU64; 2],
+    /// Mojang rate-limits each API host separately. For each upstream (see
+    /// `MojangEndpoints::upstream_url`), milliseconds after `MojangHttpClient::epoch` until
+    /// Mojang accepts requests from this route again.
+    rate_limited_until: Vec<AtomicU64>,
+    /// Milliseconds after the epoch until the route gets traffic again after a failed connection.
+    unreachable_until: AtomicU64,
 }
 
 impl Route {
-    const fn cooldown(&self, api: Api) -> &AtomicU64 {
-        match api {
-            Api::Batch => &self.cooldown_until[0],
-            Api::Profile => &self.cooldown_until[1],
-        }
+    fn is_rate_limited(&self, upstream: usize, now: u64) -> bool {
+        self.rate_limited_until
+            .get(upstream)
+            .is_none_or(|until| until.load(Ordering::Relaxed) > now)
     }
 }
 
+/// The Mojang endpoints, each on its own host. Upstream `i` is batch endpoint `i`, and the
+/// upstream after the batch endpoints is the profile endpoint.
 #[derive(Debug)]
 struct MojangEndpoints {
     batch_urls: Vec<Url>,
     profile_base_url: Url,
+}
+
+impl MojangEndpoints {
+    fn batch_upstreams(&self) -> Vec<usize> {
+        (0..self.batch_urls.len()).collect()
+    }
+
+    const fn profile_upstream(&self) -> usize {
+        self.batch_urls.len()
+    }
+
+    fn upstream_url(&self, upstream: usize) -> Option<&Url> {
+        self.batch_urls
+            .get(upstream)
+            .or_else(|| (upstream == self.profile_upstream()).then_some(&self.profile_base_url))
+    }
+}
+
+/// Why a single attempt through one route failed.
+enum AttemptError {
+    /// The route could not connect, so the request never reached Mojang.
+    Unreachable,
+    Upstream(UpstreamError),
+}
+
+impl From<UpstreamError> for AttemptError {
+    fn from(error: UpstreamError) -> Self {
+        Self::Upstream(error)
+    }
 }
 
 impl MojangEndpoints {
@@ -170,9 +201,11 @@ impl MojangHttpClient {
                 .default_headers(default_headers.clone())
                 .https_only(https_only)
         };
+        let upstream_count = endpoints.profile_upstream().saturating_add(1);
         let route = |client| Route {
             client,
-            cooldown_until: [AtomicU64::new(0), AtomicU64::new(0)],
+            rate_limited_until: (0..upstream_count).map(|_| AtomicU64::new(0)).collect(),
+            unreachable_until: AtomicU64::new(0),
         };
 
         let routes = if proxies.is_empty() {
@@ -199,26 +232,61 @@ impl MojangHttpClient {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
-    /// Picks a random route that Mojang has not rate-limited for `api`.
-    fn choose_route(&self, api: Api) -> Result<&Route, UpstreamError> {
-        let now = self.now_millis();
-        let start = random_index(self.routes.len());
-        self.routes
-            .iter()
-            .cycle()
-            .skip(start)
-            .take(self.routes.len())
-            .find(|route| route.cooldown(api).load(Ordering::Relaxed) <= now)
-            .ok_or_else(|| self.rate_limited(api))
+    fn millis_from_now(&self, delay: Duration) -> u64 {
+        self.now_millis()
+            .saturating_add(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX))
     }
 
-    /// Reports how long until the first route becomes available for `api` again.
-    fn rate_limited(&self, api: Api) -> UpstreamError {
+    /// Picks a random route and one of `upstreams` that Mojang has not rate-limited on it.
+    ///
+    /// Routes that recently failed to connect are skipped. When `allow_unreachable` is set and
+    /// no other route is ready, they are used anyway, so a short network outage does not block
+    /// every request until the cooldown ends.
+    fn choose_route(
+        &self,
+        upstreams: &[usize],
+        allow_unreachable: bool,
+    ) -> Option<(usize, &Route, usize)> {
+        let now = self.now_millis();
+        let start = random_index(self.routes.len());
+        let find = |skip_unreachable: bool| {
+            self.routes
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(start)
+                .take(self.routes.len())
+                .find_map(|(index, route)| {
+                    if skip_unreachable && route.unreachable_until.load(Ordering::Relaxed) > now {
+                        return None;
+                    }
+                    let ready: Vec<usize> = upstreams
+                        .iter()
+                        .copied()
+                        .filter(|&upstream| !route.is_rate_limited(upstream, now))
+                        .collect();
+                    ready
+                        .get(random_index(ready.len()))
+                        .map(|&upstream| (index, route, upstream))
+                })
+        };
+        find(true).or_else(|| if allow_unreachable { find(false) } else { None })
+    }
+
+    /// Reports how long until the first route becomes available for one of `upstreams` again.
+    fn rate_limited(&self, upstreams: &[usize]) -> UpstreamError {
         let now = self.now_millis();
         let available_at = self
             .routes
             .iter()
-            .map(|route| route.cooldown(api).load(Ordering::Relaxed))
+            .flat_map(|route| {
+                upstreams.iter().filter_map(|&upstream| {
+                    route
+                        .rate_limited_until
+                        .get(upstream)
+                        .map(|until| until.load(Ordering::Relaxed))
+                })
+            })
             .min()
             .unwrap_or(now);
         UpstreamError::RateLimited {
@@ -226,13 +294,16 @@ impl MojangHttpClient {
         }
     }
 
+    /// Sends a request to one of `upstreams`. `build` receives the route's client and the
+    /// upstream's URL.
     async fn request(
         &self,
-        api: Api,
+        upstreams: &[usize],
         sent_bytes: usize,
-        build: impl Fn(&Client) -> RequestBuilder,
+        build: impl Fn(&Client, &Url) -> RequestBuilder,
     ) -> Result<(StatusCode, Bytes), UpstreamError> {
         let started = tokio::time::Instant::now();
+        let mut retried_error = None;
         for attempt in 0..MAX_ATTEMPTS {
             let request_timeout = if attempt > 0 {
                 let Some(timeout) = retry_timeout(started.elapsed()) else {
@@ -242,41 +313,81 @@ impl MojangHttpClient {
             } else {
                 None
             };
-            let route = self.choose_route(api).inspect_err(|_| {
-                // A retry follows a 429 that already counted as an error.
-                if attempt == 0 {
-                    self.metrics.increment_mojang_cooldown_rejections();
-                }
-            })?;
-            let mut request = build(&route.client);
+            // A retry needs another route that is not cooling down.
+            let Some((index, route, upstream)) =
+                self.choose_route(upstreams, retried_error.is_none())
+            else {
+                break;
+            };
+            let url = self
+                .endpoints
+                .upstream_url(upstream)
+                .ok_or_else(|| self.record_invalid_response("unknown Mojang endpoint"))?;
+            let mut request = build(&route.client, url);
             if let Some(timeout) = request_timeout {
                 request = request.timeout(timeout);
             }
-            match self.send(route, api, request, sent_bytes).await {
-                Err(UpstreamError::RateLimited { .. }) => {}
-                result => return result,
+            match self.send(route, index, upstream, request, sent_bytes).await {
+                Ok(response) => return Ok(response),
+                Err(AttemptError::Unreachable) => retried_error = Some(UpstreamError::Transport),
+                Err(AttemptError::Upstream(error @ UpstreamError::RateLimited { .. })) => {
+                    retried_error = Some(error);
+                }
+                Err(AttemptError::Upstream(error)) => return Err(error),
             }
         }
-        // The last route's cooldown can outlast one that an earlier attempt rate-limited.
-        Err(self.rate_limited(api))
+        match retried_error {
+            Some(UpstreamError::Transport) => Err(UpstreamError::Transport),
+            // The last route's cooldown can outlast one that an earlier attempt rate-limited.
+            Some(_) => Err(self.rate_limited(upstreams)),
+            None => {
+                // Failed attempts already counted as errors.
+                self.metrics.increment_mojang_cooldown_rejections();
+                Err(self.rate_limited(upstreams))
+            }
+        }
     }
 
-    /// Sends a request and reads the body of successful responses.
+    /// Sends a request through `route`, the route at `index`, and reads the body of successful responses.
     ///
     /// Unsuccessful responses return their status with an empty body.
     async fn send(
         &self,
         route: &Route,
-        api: Api,
+        index: usize,
+        upstream: usize,
         request: RequestBuilder,
         sent_bytes: usize,
-    ) -> Result<(StatusCode, Bytes), UpstreamError> {
+    ) -> Result<(StatusCode, Bytes), AttemptError> {
+        let host = self
+            .endpoints
+            .upstream_url(upstream)
+            .and_then(Url::host_str)
+            .unwrap_or_default();
         self.metrics.record_mojang_request(sent_bytes);
 
-        let mut response = request
-            .send()
-            .await
-            .map_err(|error| self.record_transport_error(&error, "Mojang request failed"))?;
+        let mut response = match request.send().await {
+            Ok(response) => response,
+            Err(error) if error.is_connect() && !error.is_timeout() => {
+                self.metrics.increment_mojang_errors();
+                route.unreachable_until.fetch_max(
+                    self.millis_from_now(UNREACHABLE_ROUTE_COOLDOWN),
+                    Ordering::Relaxed,
+                );
+                error!(
+                    route = index,
+                    host,
+                    error = %ErrorChain(&error),
+                    "could not connect to Mojang through an outbound route"
+                );
+                return Err(AttemptError::Unreachable);
+            }
+            Err(error) => {
+                return Err(self
+                    .record_transport_error(&error, index, "Mojang request failed")
+                    .into());
+            }
+        };
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -286,15 +397,17 @@ impl MojangHttpClient {
                 .and_then(|value| value.trim().parse().ok())
                 .map_or(DEFAULT_RATE_LIMIT_COOLDOWN, Duration::from_secs)
                 .clamp(Duration::from_secs(1), MAX_RATE_LIMIT_COOLDOWN);
-            let available_at = self
-                .now_millis()
-                .saturating_add(u64::try_from(retry_after.as_millis()).unwrap_or(u64::MAX));
-            route
-                .cooldown(api)
-                .fetch_max(available_at, Ordering::Relaxed);
+            if let Some(until) = route.rate_limited_until.get(upstream) {
+                until.fetch_max(self.millis_from_now(retry_after), Ordering::Relaxed);
+            }
             self.metrics.increment_mojang_errors();
-            warn!(?api, ?retry_after, "Mojang rate-limited an outbound route");
-            return Err(UpstreamError::RateLimited { retry_after });
+            warn!(
+                route = index,
+                host,
+                ?retry_after,
+                "Mojang rate-limited an outbound route"
+            );
+            return Err(UpstreamError::RateLimited { retry_after }.into());
         }
         if !status.is_success() {
             return Ok((status, Bytes::new()));
@@ -303,7 +416,9 @@ impl MojangHttpClient {
             .content_length()
             .is_some_and(|length| length > MAX_UPSTREAM_RESPONSE_BYTES as u64)
         {
-            return Err(self.record_invalid_response("Mojang response exceeded the size limit"));
+            return Err(self
+                .record_invalid_response("Mojang response exceeded the size limit")
+                .into());
         }
 
         let initial_capacity = response
@@ -315,7 +430,7 @@ impl MojangHttpClient {
         loop {
             let chunk = response.chunk().await.map_err(|error| {
                 self.metrics.record_mojang_response(body.len());
-                self.record_transport_error(&error, "failed to read Mojang response")
+                self.record_transport_error(&error, index, "failed to read Mojang response")
             })?;
             let Some(chunk) = chunk else {
                 break;
@@ -323,7 +438,9 @@ impl MojangHttpClient {
             if !try_extend_body(&mut body, &chunk, MAX_UPSTREAM_RESPONSE_BYTES) {
                 self.metrics
                     .record_mojang_response(body.len().saturating_add(chunk.len()));
-                return Err(self.record_invalid_response("Mojang response exceeded the size limit"));
+                return Err(self
+                    .record_invalid_response("Mojang response exceeded the size limit")
+                    .into());
             }
         }
 
@@ -331,13 +448,18 @@ impl MojangHttpClient {
         Ok((status, body.freeze()))
     }
 
-    fn record_transport_error(&self, error: &reqwest::Error, message: &str) -> UpstreamError {
+    fn record_transport_error(
+        &self,
+        error: &reqwest::Error,
+        route: usize,
+        message: &str,
+    ) -> UpstreamError {
         self.metrics.increment_mojang_errors();
         if error.is_timeout() {
-            warn!(error = %ErrorChain(error), "{message}");
+            warn!(route, error = %ErrorChain(error), "{message}");
             UpstreamError::Timeout
         } else {
-            error!(error = %ErrorChain(error), "{message}");
+            error!(route, error = %ErrorChain(error), "{message}");
             UpstreamError::Transport
         }
     }
@@ -362,18 +484,17 @@ impl MojangService for MojangHttpClient {
             serde_json::to_vec(names).map_err(|error| self.record_invalid_response(error))?,
         );
         let sent_bytes = body.len();
-        let endpoint = self
-            .endpoints
-            .batch_urls
-            .get(random_index(self.endpoints.batch_urls.len()))
-            .ok_or_else(|| self.record_invalid_response("no Mojang batch endpoint is available"))?;
         let (status, response_body) = self
-            .request(Api::Batch, sent_bytes, |client| {
-                client
-                    .post(endpoint.clone())
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(body.clone())
-            })
+            .request(
+                &self.endpoints.batch_upstreams(),
+                sent_bytes,
+                |client, url| {
+                    client
+                        .post(url.clone())
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(body.clone())
+                },
+            )
             .await?;
 
         if !status.is_success() {
@@ -409,7 +530,10 @@ impl MojangService for MojangHttpClient {
         endpoint.set_query(Some("unsigned=false"));
 
         let (status, response_body) = self
-            .request(Api::Profile, 0, |client| client.get(endpoint.clone()))
+            // The profile URL also names the UUID, so the base URL is not used.
+            .request(&[self.endpoints.profile_upstream()], 0, |client, _| {
+                client.get(endpoint.clone())
+            })
             .await?;
         if matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_FOUND) {
             return Ok(None);
@@ -505,19 +629,35 @@ fn load_proxy_list(path: &Path) -> Result<Vec<Url>, ClientBuildError> {
 }
 
 fn parse_proxy_url(value: &str) -> Result<Url, ProxyParseError> {
-    let mut parts = value.splitn(4, ':');
-    let host = parts.next().filter(|part| !part.is_empty());
+    let value = value
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("http://"))
+        .and_then(|_| value.get(7..))
+        .unwrap_or(value);
+    // An IPv6 host contains colons, so it must be bracketed: `[::1]:8080`.
+    let (host, rest) = if let Some(value) = value.strip_prefix('[') {
+        let (address, rest) = value.split_once(']').ok_or(ProxyParseError::Format)?;
+        (
+            format!("[{address}]"),
+            rest.strip_prefix(':').ok_or(ProxyParseError::Format)?,
+        )
+    } else {
+        let (host, rest) = value.split_once(':').ok_or(ProxyParseError::Format)?;
+        (host.to_owned(), rest)
+    };
+    let mut parts = rest.splitn(3, ':');
     let port = parts.next().filter(|part| !part.is_empty());
     let username = parts.next();
     let password = parts.next();
 
-    let (host, port) = host.zip(port).ok_or(ProxyParseError::Format)?;
+    let port = port.ok_or(ProxyParseError::Format)?;
     // URL delimiters would move the port into a path or the host into credentials, so
     // `host/x:8080` would otherwise connect to port 80.
-    if host.contains(['/', '\\', '?', '#', '@']) {
+    if host.is_empty() || host.contains(['/', '\\', '?', '#', '@']) {
         return Err(ProxyParseError::Format);
     }
-    let port: u16 = port.parse().map_err(ProxyParseError::Port)?;
+    // Port 0 cannot accept connections.
+    let port: NonZeroU16 = port.parse().map_err(ProxyParseError::Port)?;
     let mut url = Url::parse(&format!("http://{host}:{port}")).map_err(ProxyParseError::Url)?;
 
     match (username, password) {
@@ -672,9 +812,20 @@ mod tests {
     }
 
     fn client(base: &str, proxies: &[Url]) -> MojangHttpClient {
+        client_with_batch_paths(base, &["bulk"], proxies)
+    }
+
+    fn client_with_batch_paths(
+        base: &str,
+        batch_paths: &[&str],
+        proxies: &[Url],
+    ) -> MojangHttpClient {
         MojangHttpClient::build(
             MojangEndpoints {
-                batch_urls: vec![Url::parse(&format!("{base}/bulk")).expect("URL should parse")],
+                batch_urls: batch_paths
+                    .iter()
+                    .map(|path| Url::parse(&format!("{base}/{path}")).expect("URL should parse"))
+                    .collect(),
                 profile_base_url: Url::parse(&format!("{base}/profile/"))
                     .expect("URL should parse"),
             },
@@ -835,6 +986,85 @@ mod tests {
         assert_eq!(long_connections.load(Ordering::SeqCst), 1);
     }
 
+    #[tokio::test]
+    async fn keeps_using_the_batch_host_that_mojang_did_not_rate_limit() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let (base, _) = serve(
+            Router::new()
+                .route("/limited", post(rate_limited))
+                .route("/bulk", post(bulk))
+                .with_state(Arc::clone(&hits)),
+        )
+        .await;
+        let client = client_with_batch_paths(&base, &["limited", "bulk"], &[]);
+
+        // Each lookup picks a batch host at random until one host is rate-limited.
+        for _ in 0..50 {
+            assert_eq!(
+                client.lookup_names(&["pistonmaster".to_owned()]).await,
+                Ok(vec![("Pistonmaster".to_owned(), uuid(PLAYER))]),
+                "a 429 from one batch host should not pause the other"
+            );
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let snapshot = client.metrics.snapshot();
+        assert_eq!(snapshot.mojang_errors, 1);
+        assert_eq!(snapshot.mojang_cooldown_rejections, 0);
+    }
+
+    /// Returns the URL of a local port that refuses connections.
+    async fn closed_port() -> Url {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        drop(listener);
+        Url::parse(&format!("http://{address}")).expect("URL should parse")
+    }
+
+    #[tokio::test]
+    async fn stops_sending_requests_through_an_unreachable_proxy() {
+        let (live, live_connections) =
+            serve(Router::new().route("/profile/{uuid}", get(profile))).await;
+        let proxies = [
+            closed_port().await,
+            Url::parse(&live).expect("URL should parse"),
+        ];
+        let client = client("http://mojang.invalid", &proxies);
+
+        // Each lookup picks a proxy at random until the closed one fails once.
+        for _ in 0..50 {
+            assert!(
+                matches!(client.lookup_skin(uuid(PLAYER)).await, Ok(Some(_))),
+                "a connection failure should be retried through the other proxy"
+            );
+        }
+        assert_eq!(
+            client.metrics.snapshot().mojang_errors,
+            1,
+            "the unreachable proxy should get no traffic during its cooldown"
+        );
+        assert!(live_connections.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn keeps_trying_the_only_route_after_a_connection_failure() {
+        let base = closed_port().await;
+        let client = client(base.as_str().trim_end_matches('/'), &[]);
+
+        for _ in 0..2 {
+            assert_eq!(
+                client.lookup_skin(uuid(PLAYER)).await,
+                Err(UpstreamError::Transport)
+            );
+        }
+        let snapshot = client.metrics.snapshot();
+        assert_eq!(snapshot.mojang_errors, 2);
+        assert_eq!(snapshot.mojang_cooldown_rejections, 0);
+    }
+
     #[test]
     fn gives_a_retry_only_the_rest_of_the_budget() {
         let secs = Duration::from_secs_f32;
@@ -903,6 +1133,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_prefixed_and_ipv6_proxy_entries() {
+        for (entry, expected) in [
+            ("http://127.0.0.1:8080", "http://127.0.0.1:8080/"),
+            (
+                "HTTP://proxy.example:3128:user:pass",
+                "http://user:pass@proxy.example:3128/",
+            ),
+            ("[::1]:8080", "http://[::1]:8080/"),
+            (
+                "http://[::1]:8080:user:pass",
+                "http://user:pass@[::1]:8080/",
+            ),
+        ] {
+            let proxy = parse_proxy_url(entry).expect("proxy should parse");
+            assert_eq!(proxy.as_str(), expected, "{entry}");
+        }
+    }
+
+    #[test]
     fn rejects_incomplete_proxy_entries() {
         assert_eq!(parse_proxy_url("127.0.0.1"), Err(ProxyParseError::Format));
         assert!(matches!(
@@ -917,7 +1166,20 @@ mod tests {
             parse_proxy_url("127.0.0.1:8080:user"),
             Err(ProxyParseError::Format)
         );
+        assert!(matches!(
+            parse_proxy_url("127.0.0.1:0"),
+            Err(ProxyParseError::Port(_))
+        ));
+        assert!(
+            parse_proxy_url("https://127.0.0.1:8080").is_err(),
+            "only HTTP proxies are supported"
+        );
         for entry in [
+            "::1:8080",
+            "[::1]",
+            "[::1]8080",
+            "[::1:8080",
+            ":8080",
             "proxy.example/path:8080",
             "proxy.example\\path:8080",
             "proxy.example?x:8080",
