@@ -339,7 +339,13 @@ async fn process_batch(
     let profiles = match service.lookup_names(&names).await {
         Ok(profiles) => profiles,
         Err(error) => {
-            reject_responses(responses, error);
+            for response in responses {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The request may have been canceled before the error could be delivered."
+                )]
+                let _ = response.send(Err(error));
+            }
             return;
         }
     };
@@ -358,19 +364,6 @@ async fn process_batch(
             reason = "The request may have been canceled before the batch completed."
         )]
         let _ = response.send(Ok(uuid));
-    }
-}
-
-fn reject_responses(
-    responses: impl IntoIterator<Item = oneshot::Sender<Result<Option<Uuid>, UpstreamError>>>,
-    error: UpstreamError,
-) {
-    for response in responses {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "The request may have been canceled before the error could be delivered."
-        )]
-        let _ = response.send(Err(error));
     }
 }
 
