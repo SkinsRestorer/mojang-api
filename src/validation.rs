@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 #[must_use]
 pub fn is_valid_minecraft_username(username: &str) -> bool {
+    // Mojang's bulk endpoints reject a whole batch when one name exceeds 25 characters, so this
+    // limit also protects the other names in a batch.
     !username.is_empty()
         && username.len() <= 16
         && username
@@ -41,6 +43,8 @@ mod tests {
         assert!(!is_valid_minecraft_username("seventeen_chars_x"));
         assert!(!is_valid_minecraft_username("invalid name"));
         assert!(!is_valid_minecraft_username("name!"));
+        assert!(is_valid_minecraft_username("sixteen_chars_xx"));
+        assert!(!is_valid_minecraft_username("Pistonmästr"));
     }
 
     #[test]
@@ -51,5 +55,15 @@ mod tests {
         assert_eq!(parse_minecraft_uuid(dashed), parse_minecraft_uuid(compact));
         assert!(parse_minecraft_uuid("{b1ae0778-4817-436c-96a3-a72c67cda060}").is_none());
         assert!(parse_minecraft_uuid("not-a-uuid").is_none());
+        assert_eq!(
+            parse_minecraft_uuid(&dashed.to_ascii_uppercase()),
+            parse_minecraft_uuid(dashed)
+        );
+        assert_eq!(
+            parse_minecraft_uuid("00000000-0000-0000-0000-000000000000"),
+            Some(uuid::Uuid::nil())
+        );
+        assert!(parse_minecraft_uuid("urn:uuid:b1ae0778-4817-436c-96a3-a72c67cda060").is_none());
+        assert!(parse_minecraft_uuid("b1ae07784-817-436c-96a3-a72c67cda060").is_none());
     }
 }
