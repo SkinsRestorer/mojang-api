@@ -199,11 +199,11 @@ async fn lookup_skin(
         .and_then(|Path(uuid)| parse_minecraft_uuid(&uuid))
         .ok_or(AppError::InvalidUuid)?;
 
-    let mojang = Arc::clone(&state.mojang);
     let result = state
         .cache
-        .get_or_try_insert_skin(uuid, async move {
-            mojang
+        .get_or_try_insert_skin(uuid, async {
+            state
+                .mojang
                 .lookup_skin(uuid)
                 .await
                 .map(|property| property.map(Arc::new))
