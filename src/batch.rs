@@ -208,7 +208,6 @@ impl BatchProcessor {
             )]
             let _ = shutdown.send(());
         }
-        drop(self.lookup);
         match timeout(BATCH_SHUTDOWN_TIMEOUT, &mut self.task).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => error!(%error, "batch processor stopped unexpectedly"),
@@ -235,13 +234,16 @@ async fn run_batch_processor(
     let mut ticker = interval(config.interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     ticker.tick().await;
+    let mut accepting = true;
 
+    // After shutdown the receiver is closed, so `recv` returns the lookups that are still
+    // queued and then `None`, which ends the loop.
     loop {
         tokio::select! {
             biased;
-            _ = &mut shutdown => {
+            _ = &mut shutdown, if accepting => {
+                accepting = false;
                 receiver.close();
-                break;
             }
             lookup = receiver.recv() => {
                 let Some(lookup) = lookup else {
@@ -251,10 +253,7 @@ async fn run_batch_processor(
                 if pending.len() >= config.size.get() {
                     spawn_batch(
                         &mut tasks,
-                        std::mem::replace(
-                            &mut pending,
-                            Vec::with_capacity(config.size.get()),
-                        ),
+                        std::mem::take(&mut pending),
                         Arc::clone(&service),
                         Arc::clone(&metrics),
                         Arc::clone(&semaphore),
@@ -266,10 +265,7 @@ async fn run_batch_processor(
                 if !pending.is_empty() {
                     spawn_batch(
                         &mut tasks,
-                        std::mem::replace(
-                            &mut pending,
-                            Vec::with_capacity(config.size.get()),
-                        ),
+                        std::mem::take(&mut pending),
                         Arc::clone(&service),
                         Arc::clone(&metrics),
                         Arc::clone(&semaphore),
@@ -282,20 +278,6 @@ async fn run_batch_processor(
                     error!(%error, "batch task stopped unexpectedly");
                 }
             }
-        }
-    }
-
-    while let Some(lookup) = receiver.recv().await {
-        pending.push(lookup);
-        if pending.len() >= config.size.get() {
-            spawn_batch(
-                &mut tasks,
-                std::mem::replace(&mut pending, Vec::with_capacity(config.size.get())),
-                Arc::clone(&service),
-                Arc::clone(&metrics),
-                Arc::clone(&semaphore),
-            )
-            .await;
         }
     }
 
@@ -722,6 +704,42 @@ mod tests {
 
         drop(lookup);
         processor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_answers_lookups_that_are_still_queued() {
+        let service = Arc::new(FakeMojangService::default());
+        let processor = BatchProcessor::start(
+            Arc::<FakeMojangService>::clone(&service),
+            CacheManager::default(),
+            Arc::new(Metrics::default()),
+            BatchConfig::new(10, Duration::from_secs(30), 32, 2)
+                .expect("test batch configuration should be valid"),
+        );
+        let lookup = processor.lookup();
+        let requests = ["First", "Second"].map(|name| {
+            let lookup = lookup.clone();
+            tokio::spawn(async move { lookup.lookup(name.to_owned()).await })
+        });
+        // Let both lookups reach the queue before the long batch interval elapses.
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::timeout(Duration::from_secs(1), processor.shutdown())
+            .await
+            .expect("shutdown should flush the pending batch without waiting for the interval");
+        for request in requests {
+            assert_eq!(request.await.expect("lookup task should finish"), Ok(None));
+        }
+        assert_eq!(
+            service
+                .calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
