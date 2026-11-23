@@ -25,7 +25,7 @@ use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use tracing::{Level, Span, warn};
-use utoipa::OpenApi;
+use utoipa::{Modify, OpenApi};
 
 use crate::{
     batch::{BatchLookup, LOOKUP_TIMEOUT},
@@ -93,10 +93,95 @@ pub struct AppState {
         (url = "https://eclipse.skinsrestorer.net", description = "Production")
     ),
     paths(lookup_uuid, lookup_skin, health),
+    modifiers(&RateLimitHeaders),
     // Listed so that the Mojang endpoints appear above the health check.
-    tags((name = "mojang"), (name = "health"))
+    tags(
+        (name = "mojang", description = "Look up player UUIDs and skins through a shared cache"),
+        (name = "health", description = "Liveness probe, exempt from the rate limit")
+    )
 )]
 struct ApiDoc;
+
+/// Paths that bypass the rate limiter and so do not send `RateLimit-*` headers.
+const RATE_LIMIT_EXEMPT_PATHS: [&str; 1] = ["/health"];
+
+/// Responses that list the `RateLimit-*` headers. Every response of a limited route carries
+/// them, but listing them on errors too made Swagger UI about 40% taller.
+const RATE_LIMIT_DOCUMENTED_STATUSES: [&str; 2] = ["200", "429"];
+
+/// Documents the `RateLimit-*` headers once under `components/headers` and references them
+/// from the main responses of every rate-limited operation.
+struct RateLimitHeaders;
+
+impl RateLimitHeaders {
+    const HEADERS: [(&str, &str, bool); 4] = [
+        ("RateLimit-Limit", "Requests allowed per window", false),
+        (
+            "RateLimit-Policy",
+            "Limit and window in seconds, such as `1000;w=60`",
+            true,
+        ),
+        ("RateLimit-Remaining", "Requests left in the window", false),
+        (
+            "RateLimit-Reset",
+            "Seconds until the full quota is available again",
+            false,
+        ),
+    ];
+}
+
+impl Modify for RateLimitHeaders {
+    fn modify(&self, document: &mut utoipa::openapi::OpenApi) {
+        let components = document.components.get_or_insert_with(Default::default);
+        for (name, description, is_text) in Self::HEADERS {
+            let schema: utoipa::openapi::Object = if is_text {
+                utoipa::openapi::ObjectBuilder::new()
+                    .schema_type(utoipa::openapi::Type::String)
+                    .build()
+            } else {
+                utoipa::openapi::ObjectBuilder::new()
+                    .schema_type(utoipa::openapi::Type::Integer)
+                    .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(
+                        utoipa::openapi::KnownFormat::Int32,
+                    )))
+                    .minimum(Some(0))
+                    .build()
+            };
+            let mut header = utoipa::openapi::Header::new(schema);
+            header.description = Some(description.to_owned());
+            components
+                .headers
+                .insert(name.to_owned(), utoipa::openapi::RefOr::T(header));
+        }
+
+        let operations = document
+            .paths
+            .paths
+            .iter_mut()
+            .filter(|(path, _)| !RATE_LIMIT_EXEMPT_PATHS.contains(&path.as_str()))
+            .filter_map(|(_, item)| item.get.as_mut());
+        for operation in operations {
+            let responses = operation
+                .responses
+                .responses
+                .iter_mut()
+                .filter(|(status, _)| RATE_LIMIT_DOCUMENTED_STATUSES.contains(&status.as_str()));
+            for (_, response) in responses {
+                let utoipa::openapi::RefOr::T(response) = response else {
+                    continue;
+                };
+                for (name, _, _) in Self::HEADERS {
+                    response.headers.insert(
+                        name.to_owned(),
+                        utoipa::openapi::RefOr::Ref(utoipa::openapi::Ref::new(format!(
+                            "#/components/headers/{name}"
+                        ))),
+                    );
+                }
+            }
+        }
+    }
+}
 
 /// Builds the application router.
 ///
@@ -619,6 +704,52 @@ mod tests {
                 uuid.is_match(value),
                 parse_minecraft_uuid(value).is_some(),
                 "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn documents_rate_limit_headers_on_limited_routes() {
+        const HEADERS: [&str; 4] = [
+            "RateLimit-Limit",
+            "RateLimit-Policy",
+            "RateLimit-Remaining",
+            "RateLimit-Reset",
+        ];
+        let document = serde_json::to_value(ApiDoc::openapi()).expect("document should serialize");
+        for header in HEADERS {
+            let description = document
+                .pointer(&format!("/components/headers/{header}/description"))
+                .and_then(Value::as_str);
+            assert!(description.is_some_and(|text| !text.is_empty()), "{header}");
+        }
+
+        let responses = |path: &str| {
+            document
+                .pointer(&format!("/paths/{}/get/responses", path.replace('/', "~1")))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} should document responses"))
+        };
+        for path in ["/mojang/uuid/{name}", "/mojang/skin/{uuid}"] {
+            for status in ["200", "429"] {
+                let response = responses(path)
+                    .get(status)
+                    .unwrap_or_else(|| panic!("{path} should document {status}"));
+                for header in HEADERS {
+                    assert_eq!(
+                        response
+                            .pointer(&format!("/headers/{header}/$ref"))
+                            .and_then(Value::as_str),
+                        Some(format!("#/components/headers/{header}").as_str()),
+                        "{path} {status} {header}"
+                    );
+                }
+            }
+        }
+        for (status, response) in responses("/health") {
+            assert!(
+                response.get("headers").is_none(),
+                "the health check is not rate-limited: {status}"
             );
         }
     }
