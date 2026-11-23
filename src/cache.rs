@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, hash::Hash, sync::Arc, time::Duration};
 
 use moka::{Expiry, future::Cache};
 use uuid::Uuid;
@@ -79,18 +79,7 @@ impl CacheManager {
     where
         E: Send + Sync + 'static,
     {
-        if let Some(value) = self.names.get(&normalized_name).await {
-            return Ok(CacheLoad { value, hit: true });
-        }
-        let entry = self
-            .names
-            .entry(normalized_name)
-            .or_try_insert_with(init)
-            .await?;
-        Ok(CacheLoad {
-            value: entry.into_value(),
-            hit: false,
-        })
+        get_or_try_insert(&self.names, normalized_name, init).await
     }
 
     /// Returns the cached skin or coalesces concurrent initialization for the same UUID.
@@ -108,15 +97,28 @@ impl CacheManager {
     where
         E: Send + Sync + 'static,
     {
-        if let Some(value) = self.skins.get(&uuid).await {
-            return Ok(CacheLoad { value, hit: true });
-        }
-        let entry = self.skins.entry(uuid).or_try_insert_with(init).await?;
-        Ok(CacheLoad {
-            value: entry.into_value(),
-            hit: false,
-        })
+        get_or_try_insert(&self.skins, uuid, init).await
     }
+}
+
+async fn get_or_try_insert<K, V, E>(
+    cache: &Cache<K, V>,
+    key: K,
+    init: impl Future<Output = Result<V, E>>,
+) -> Result<CacheLoad<V>, Arc<E>>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    E: Send + Sync + 'static,
+{
+    if let Some(value) = cache.get(&key).await {
+        return Ok(CacheLoad { value, hit: true });
+    }
+    let entry = cache.entry(key).or_try_insert_with(init).await?;
+    Ok(CacheLoad {
+        value: entry.into_value(),
+        hit: false,
+    })
 }
 
 #[derive(Debug)]
@@ -151,17 +153,11 @@ impl<K, V> Expiry<K, Option<V>> for OptionalValueExpiry {
         value: &Option<V>,
         _created_at: std::time::Instant,
     ) -> Option<Duration> {
-        Some(self.ttl_for(value.as_ref()))
-    }
-}
-
-impl OptionalValueExpiry {
-    fn ttl_for<T>(&self, value: Option<&T>) -> Duration {
-        if value.is_some() {
+        Some(if value.is_some() {
             self.positive_ttl
         } else {
             self.negative_ttl
-        }
+        })
     }
 }
 
