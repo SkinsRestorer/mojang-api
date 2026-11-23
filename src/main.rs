@@ -87,8 +87,7 @@ async fn run(
         },
         config.trusted_proxies,
     );
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.server_port))
-        .await
+    let listener = server::bind(config.server_port)
         .map_err(|error| format!("could not listen on port {}: {error}", config.server_port))?;
     info!(
         address = %listener.local_addr()?,
