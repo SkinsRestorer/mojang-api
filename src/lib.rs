@@ -5,6 +5,7 @@ mod config;
 mod docs;
 pub mod error;
 mod http_client;
+mod log_throttle;
 mod metrics;
 pub mod mojang;
 mod rate_limit;

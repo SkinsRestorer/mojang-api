@@ -165,6 +165,8 @@ The rate limiter uses the generic cell rate algorithm, so a client cannot send t
 
 The HTTP server closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 8 seconds.
 
+Logs are plain text on stdout, with colors only when stdout is a terminal. Warnings that can repeat for every request log at most once per minute: a full batch queue, too many skin lookups, every proxy cooling down for a Mojang API, and `5xx` responses. Each of these lines has a `suppressed` field with the number of identical events since the previous line.
+
 Metrics remain cumulative in memory. A Discord report advances its reporting window only after Discord accepts it, so transport errors and non-successful HTTP responses do not discard counters.
 
 Each report shows the Mojang error rate of its window: Mojang errors plus lookups skipped because every route was rate-limited, divided by Mojang requests plus those skips. The report is green below 1%, orange from 1% to below 10%, and red at 10% or more. The report also counts rejected work: username lookups rejected because the batch queue was full, skin lookups rejected because 64 were already in progress, and client requests rejected by the rate limiter.

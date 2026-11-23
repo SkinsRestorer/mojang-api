@@ -1,4 +1,9 @@
-use std::{error::Error, process::ExitCode, sync::Arc};
+use std::{
+    error::Error,
+    io::{IsTerminal, stdout},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use mojang_api::{
     AppState, BatchConfig, BatchProcessor, CacheManager, Config, Metrics, MojangHttpClient,
@@ -156,7 +161,9 @@ fn initialize_tracing() -> Result<bool, BoxError> {
         Ok(filter) => (filter, false),
         Err(_) => (EnvFilter::new("info"), true),
     };
+    // Container log collectors store escape codes as literal text.
     tracing_subscriber::fmt()
+        .with_ansi(stdout().is_terminal())
         .with_env_filter(filter)
         .try_init()?;
     Ok(invalid)

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     cache::{CacheLoad, CacheManager},
+    log_throttle::{LOG_INTERVAL, LogThrottle},
     metrics::Metrics,
     mojang::{MojangService, UPSTREAM_BUDGET, UpstreamError},
 };
@@ -138,8 +139,14 @@ impl BatchLookup {
                     })
                     .map_err(|error| match error {
                         TrySendError::Full(_) => {
-                            warn!("rejecting Mojang lookup because the batch queue is full");
                             metrics.increment_batch_queue_rejections();
+                            static QUEUE_FULL: LogThrottle = LogThrottle::new(LOG_INTERVAL);
+                            if let Some(suppressed) = QUEUE_FULL.check() {
+                                warn!(
+                                    suppressed,
+                                    "rejecting Mojang lookup because the batch queue is full"
+                                );
+                            }
                             UpstreamError::Overloaded
                         }
                         TrySendError::Closed(_) => {

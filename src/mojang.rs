@@ -26,6 +26,7 @@ use uuid::Uuid;
 use crate::{
     error::ErrorChain,
     http_client::http_client_builder,
+    log_throttle::{LOG_INTERVAL, LogThrottle},
     metrics::Metrics,
     types::{MojangBatchProfile, MojangProfile, SkinProperty},
     validation::parse_minecraft_uuid,
@@ -343,7 +344,17 @@ impl MojangHttpClient {
             None => {
                 // Failed attempts already counted as errors.
                 self.metrics.increment_mojang_cooldown_rejections();
-                Err(self.rate_limited(upstreams))
+                let error = self.rate_limited(upstreams);
+                static ALL_ROUTES_COOLING_DOWN: LogThrottle = LogThrottle::new(LOG_INTERVAL);
+                if let Some(suppressed) = ALL_ROUTES_COOLING_DOWN.check() {
+                    warn!(
+                        ?upstreams,
+                        ?error,
+                        suppressed,
+                        "rejecting Mojang request because every outbound route is cooling down"
+                    );
+                }
+                Err(error)
             }
         }
     }
@@ -518,8 +529,14 @@ impl MojangService for MojangHttpClient {
 
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
         let Ok(_permit) = self.skin_lookups.try_acquire() else {
-            warn!("rejecting skin lookup because too many are in progress");
             self.metrics.increment_skin_lookup_rejections();
+            static TOO_MANY_SKIN_LOOKUPS: LogThrottle = LogThrottle::new(LOG_INTERVAL);
+            if let Some(suppressed) = TOO_MANY_SKIN_LOOKUPS.check() {
+                warn!(
+                    suppressed,
+                    "rejecting skin lookup because too many are in progress"
+                );
+            }
             return Err(UpstreamError::Overloaded);
         };
         let compact_uuid = uuid.simple().to_string();

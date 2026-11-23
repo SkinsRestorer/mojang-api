@@ -16,10 +16,11 @@ use axum::{
 use ipnet::IpNet;
 use serde::Serialize;
 use tower_http::{
+    classify::ServerErrorsFailureClass,
     cors::{Any, CorsLayer},
-    trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
+    trace::{DefaultMakeSpan, TraceLayer},
 };
-use tracing::Level;
+use tracing::{Level, Span, warn};
 use utoipa::OpenApi;
 
 use crate::{
@@ -27,6 +28,7 @@ use crate::{
     cache::{CacheLoad, CacheManager},
     docs,
     error::AppError,
+    log_throttle::{LOG_INTERVAL, LogThrottle},
     metrics::Metrics,
     mojang::{MojangService, UPSTREAM_BUDGET},
     rate_limit::{RateLimiter, enforce_rate_limit},
@@ -138,8 +140,25 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
+                .on_failure(
+                    |classification: ServerErrorsFailureClass, latency: Duration, _: &Span| {
+                        log_failure(&classification, latency);
+                    },
+                ),
         )
+}
+
+/// Logs a failed response, at most once per interval, so an outage cannot flood the logs.
+fn log_failure(classification: &ServerErrorsFailureClass, latency: Duration) {
+    static FAILED_RESPONSES: LogThrottle = LogThrottle::new(LOG_INTERVAL);
+    if let Some(suppressed) = FAILED_RESPONSES.check() {
+        warn!(
+            %classification,
+            latency_ms = latency.as_millis(),
+            suppressed,
+            "response failed"
+        );
+    }
 }
 
 /// Look up a player's UUID by username
