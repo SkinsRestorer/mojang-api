@@ -106,7 +106,9 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
     // headers and preflight requests do not use up a client's quota.
     unlimited_routes
         .merge(limited_routes)
-        .with_state(state)
+        // Axum clones the state for every request. A moka cache holds several reference
+        // counts and channel handles, so one `Arc` keeps that clone cheap.
+        .with_state(Arc::new(state))
         .layer(middleware::from_fn_with_state(
             REQUEST_TIMEOUT,
             enforce_deadline,
@@ -147,7 +149,7 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
     tag = "mojang"
 )]
 async fn lookup_uuid(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     name: Result<Path<String>, PathRejection>,
 ) -> Result<Response, AppError> {
     state.metrics.increment_uuid_requests();
@@ -190,7 +192,7 @@ async fn lookup_uuid(
     tag = "mojang"
 )]
 async fn lookup_skin(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     uuid: Result<Path<String>, PathRejection>,
 ) -> Result<Response, AppError> {
     state.metrics.increment_skin_requests();
@@ -238,7 +240,7 @@ async fn lookup_skin(
     ),
     tag = "health"
 )]
-async fn health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
     let (code, status) = if state.batch_lookup.is_available() {
         (StatusCode::OK, HealthStatus::Up)
     } else {
