@@ -6,14 +6,21 @@ use uuid::Uuid;
 
 use crate::types::SkinProperty;
 
-const NAME_CACHE_CAPACITY: u64 = 10_000;
+const NAME_CACHE_CAPACITY: u64 = 100_000;
 const SKIN_CACHE_CAPACITY_BYTES: u64 = 32 * 1024 * 1024;
-const POSITIVE_CACHE_TTL: Duration = Duration::from_hours(6);
+/// A name keeps its UUID until the player renames, which Mojang limits to every 30 days.
+const POSITIVE_NAME_TTL: Duration = Duration::from_hours(6);
+/// Players can change skins at any time, so skins expire sooner than names.
+const POSITIVE_SKIN_TTL: Duration = Duration::from_hours(1);
 const NEGATIVE_CACHE_TTL: Duration = Duration::from_mins(15);
 const ESTIMATED_SKIN_ENTRY_BYTES: u64 = 2 * 1024;
 const SKIN_ENTRY_OVERHEAD_BYTES: usize = 128;
 const MAX_CACHE_TTL: Duration = Duration::from_hours(8_760_000);
 
+/// Caches name-to-UUID and UUID-to-skin lookups.
+///
+/// The two caches expire independently, so a cached name and the cached skin for its UUID
+/// may come from different points in time.
 #[derive(Debug, Clone)]
 pub struct CacheManager {
     names: Cache<String, Option<Uuid>>,
@@ -25,8 +32,14 @@ impl Default for CacheManager {
         Self::build(
             NAME_CACHE_CAPACITY,
             SKIN_CACHE_CAPACITY_BYTES,
-            POSITIVE_CACHE_TTL,
-            NEGATIVE_CACHE_TTL,
+            OptionalValueExpiry {
+                positive_ttl: POSITIVE_NAME_TTL,
+                negative_ttl: NEGATIVE_CACHE_TTL,
+            },
+            OptionalValueExpiry {
+                positive_ttl: POSITIVE_SKIN_TTL,
+                negative_ttl: NEGATIVE_CACHE_TTL,
+            },
         )
     }
 }
@@ -47,7 +60,7 @@ impl CacheManager {
         )
     }
 
-    /// Creates caches with independent name-entry and skin-byte limits.
+    /// Creates caches with independent name-entry and skin-byte limits that share TTLs.
     ///
     /// # Errors
     ///
@@ -60,40 +73,43 @@ impl CacheManager {
     ) -> Result<Self, CacheConfigError> {
         validate_ttl(positive_ttl)?;
         validate_ttl(negative_ttl)?;
+        let expiry = OptionalValueExpiry {
+            positive_ttl,
+            negative_ttl,
+        };
         Ok(Self::build(
             name_capacity,
             skin_capacity_bytes,
-            positive_ttl,
-            negative_ttl,
+            expiry,
+            expiry,
         ))
     }
 
     fn build(
         name_capacity: u64,
         skin_capacity_bytes: u64,
-        positive_ttl: Duration,
-        negative_ttl: Duration,
+        name_expiry: OptionalValueExpiry,
+        skin_expiry: OptionalValueExpiry,
     ) -> Self {
-        let expiry = OptionalValueExpiry {
-            positive_ttl,
-            negative_ttl,
-        };
         Self {
             names: Cache::builder()
                 .max_capacity(name_capacity)
-                .expire_after(expiry)
+                .expire_after(name_expiry)
                 .build(),
             skins: Cache::builder()
                 .weigher(|uuid: &Uuid, property: &Option<Arc<SkinProperty>>| {
                     skin_entry_weight(uuid, property.as_ref())
                 })
                 .max_capacity(skin_capacity_bytes)
-                .expire_after(expiry)
+                .expire_after(skin_expiry)
                 .build(),
         }
     }
 
     /// Returns the cached UUID or coalesces concurrent initialization for the same name.
+    ///
+    /// The result is a hit only when the value was already cached. Requests that wait for
+    /// another request's in-flight load count as misses.
     ///
     /// # Errors
     ///
@@ -106,18 +122,23 @@ impl CacheManager {
     where
         E: Send + Sync + 'static,
     {
+        if let Some(value) = self.names.get(&normalized_name).await {
+            return Ok(CacheLoad { value, hit: true });
+        }
         let entry = self
             .names
             .entry(normalized_name)
             .or_try_insert_with(init)
             .await?;
         Ok(CacheLoad {
-            loaded: entry.is_fresh(),
             value: entry.into_value(),
+            hit: false,
         })
     }
 
     /// Returns the cached skin or coalesces concurrent initialization for the same UUID.
+    ///
+    /// Hits follow the same rules as [`Self::get_or_try_insert_uuid`].
     ///
     /// # Errors
     ///
@@ -130,31 +151,28 @@ impl CacheManager {
     where
         E: Send + Sync + 'static,
     {
+        if let Some(value) = self.skins.get(&uuid).await {
+            return Ok(CacheLoad { value, hit: true });
+        }
         let entry = self.skins.entry(uuid).or_try_insert_with(init).await?;
         Ok(CacheLoad {
-            loaded: entry.is_fresh(),
             value: entry.into_value(),
+            hit: false,
         })
-    }
-
-    pub async fn clear(&self) {
-        self.names.invalidate_all();
-        self.skins.invalidate_all();
-        self.names.run_pending_tasks().await;
-        self.skins.run_pending_tasks().await;
     }
 }
 
 #[derive(Debug)]
 pub struct CacheLoad<T> {
     value: T,
-    loaded: bool,
+    hit: bool,
 }
 
 impl<T> CacheLoad<T> {
+    /// Reports whether the value was already cached.
     #[must_use]
-    pub fn was_loaded(&self) -> bool {
-        self.loaded
+    pub fn was_hit(&self) -> bool {
+        self.hit
     }
 
     #[must_use]
@@ -293,15 +311,22 @@ mod tests {
         ];
 
         assert_eq!(loads.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            results.iter().filter(|result| result.was_loaded()).count(),
-            1
+        assert!(
+            results.iter().all(|result| !result.was_hit()),
+            "waiting for an in-flight load is a miss"
         );
         assert!(
             results
                 .into_iter()
                 .all(|result| result.into_value() == Some(Uuid::nil()))
         );
+
+        let cached = cache
+            .get_or_try_insert_uuid("player".to_owned(), load())
+            .await
+            .expect("cache lookup should succeed");
+        assert!(cached.was_hit(), "a cached value is a hit");
+        assert_eq!(loads.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

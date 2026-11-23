@@ -165,11 +165,9 @@ async fn lookup_skin(
     let uuid = parse_minecraft_uuid(&uuid).ok_or(AppError::InvalidUuid)?;
 
     let mojang = Arc::clone(&state.mojang);
-    let metrics = Arc::clone(&state.metrics);
     let result = state
         .cache
         .get_or_try_insert_skin(uuid, async move {
-            metrics.increment_skin_cache_misses();
             mojang
                 .lookup_skin(uuid)
                 .await
@@ -177,8 +175,10 @@ async fn lookup_skin(
         })
         .await
         .map_err(|error| *error)?;
-    if !result.was_loaded() {
+    if result.was_hit() {
         state.metrics.increment_skin_cache_hits();
+    } else {
+        state.metrics.increment_skin_cache_misses();
     }
     let property = result.into_value();
 

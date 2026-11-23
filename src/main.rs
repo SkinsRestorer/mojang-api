@@ -57,7 +57,7 @@ async fn run(
     let app = build_router(
         AppState {
             batch_lookup: batch_processor.lookup(),
-            cache: cache.clone(),
+            cache,
             mojang,
             metrics,
         },
@@ -73,7 +73,6 @@ async fn run(
 
     reporter.shutdown().await;
     batch_processor.shutdown().await;
-    cache.clear().await;
     info!("server stopped");
     Ok(())
 }

@@ -85,11 +85,9 @@ impl BatchLookup {
         name.make_ascii_lowercase();
         let request_name = name.clone();
         let sender = self.sender.clone();
-        let metrics = Arc::clone(&self.metrics);
         let result = self
             .cache
             .get_or_try_insert_uuid(name, async move {
-                metrics.increment_uuid_cache_misses();
                 let (response, receiver) = oneshot::channel();
                 sender
                     .send(PendingLookup {
@@ -109,8 +107,10 @@ impl BatchLookup {
             .await
             .map_err(|error| *error)?;
 
-        if !result.was_loaded() {
+        if result.was_hit() {
             self.metrics.increment_uuid_cache_hits();
+        } else {
+            self.metrics.increment_uuid_cache_misses();
         }
         Ok(result.into_value())
     }
