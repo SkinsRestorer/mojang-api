@@ -8,7 +8,11 @@ description = "A caching and batching proxy for Mojang profile APIs"
 
 [dependencies]
 async-trait = "0.1.91"
-axum = "0.8.9"
+axum = { version = "0.8.9", default-features = false, features = [
+  "json",
+  "tokio",
+  "tracing",
+] }
 bytes = "1.12.1"
 dotenvy = "0.15.7"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
@@ -50,6 +54,10 @@ utoipa-swagger-ui = { version = "10.0.0", default-features = false, features = [
 ] }
 url = "2.5.8"
 uuid = { version = "1.24.0", features = ["serde"] }
+
+[dev-dependencies]
+# The tests run real servers with `axum::serve`.
+axum = { version = "0.8.9", default-features = false, features = ["http1"] }
 
 [profile.release]
 codegen-units = 1
