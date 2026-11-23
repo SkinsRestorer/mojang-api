@@ -16,12 +16,7 @@ axum = { version = "0.8.9", default-features = false, features = [
 bytes = "1.12.1"
 dotenvy = "0.15.7"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
-hyper-util = { version = "0.1.20", features = [
-  "http1",
-  "server",
-  "server-graceful",
-  "tokio",
-] }
+hyper-util = { version = "0.1.20", features = ["server-graceful", "tokio"] }
 ipnet = "2.12.0"
 jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 moka = { version = "0.12.15", features = ["future"] }
@@ -48,7 +43,7 @@ tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-utoipa = { version = "6.0.0", features = ["axum_extras", "uuid"] }
+utoipa = { version = "6.0.0", features = ["uuid"] }
 utoipa-swagger-ui = { version = "10.0.0", default-features = false, features = [
   "vendored",
 ] }
@@ -95,8 +90,6 @@ allow_attributes_without_reason = "warn"
 map_err_ignore = "warn"
 unused_result_ok = "warn"
 # Safety and correctness
-undocumented_unsafe_blocks = "warn"
-multiple_unsafe_ops_per_block = "warn"
 string_slice = "warn"
 float_cmp_const = "warn"
 lossy_float_literal = "warn"
