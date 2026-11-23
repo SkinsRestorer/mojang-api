@@ -51,11 +51,23 @@ impl DiscordReporter {
             }
         };
 
+        let reporter = Self::spawn(client, webhook, metrics, REPORT_INTERVAL);
+        info!("Discord status reporter started");
+        reporter
+    }
+
+    /// Sends a report every `report_interval` until shutdown.
+    fn spawn(
+        client: reqwest::Client,
+        webhook: Url,
+        metrics: Arc<Metrics>,
+        report_interval: Duration,
+    ) -> Self {
         let (shutdown, mut shutdown_receiver) = oneshot::channel();
         let initial_snapshot = metrics.snapshot();
         let reporter_started_at = Instant::now();
         let task = tokio::spawn(async move {
-            let mut ticker = interval(REPORT_INTERVAL);
+            let mut ticker = interval(report_interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             ticker.tick().await;
             let mut last_successful_snapshot = initial_snapshot;
@@ -98,7 +110,6 @@ impl DiscordReporter {
                 }
             }
         });
-        info!("Discord status reporter started");
         Self {
             shutdown: Some(shutdown),
             task: Some(task),
@@ -330,10 +341,23 @@ fn load_average() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
-    use super::{build_report, format_bytes, format_duration, format_number, format_report_period};
-    use crate::metrics::MetricsSnapshot;
+    use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+    use reqwest::Url;
+    use tokio::sync::mpsc;
+
+    use super::{
+        DiscordReporter, build_report, format_bytes, format_duration, format_number,
+        format_report_period,
+    };
+    use crate::{
+        http_client::http_client_builder,
+        metrics::{Metrics, MetricsSnapshot},
+    };
 
     fn field_value<'a>(report: &'a serde_json::Value, name: &str) -> &'a str {
         report["embeds"][0]["fields"]
@@ -384,5 +408,102 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(90_061)), "1d 1h 1m 1s");
         assert_eq!(format_report_period(Duration::from_secs(301)), "6min");
         assert_eq!(format_number(1_234_567), "1,234,567");
+    }
+
+    /// Fails the first webhook call and accepts later ones, recording each report's request
+    /// total. Every call also adds requests, so each report covers a different window.
+    #[derive(Clone)]
+    struct FakeWebhook {
+        metrics: Arc<Metrics>,
+        calls: Arc<Mutex<usize>>,
+        totals: mpsc::UnboundedSender<String>,
+    }
+
+    async fn webhook(
+        State(fake): State<FakeWebhook>,
+        Json(report): Json<serde_json::Value>,
+    ) -> StatusCode {
+        let total = report["embeds"][0]["fields"][1]["value"]
+            .as_str()
+            .and_then(|value| value.lines().next())
+            .unwrap_or_default()
+            .to_owned();
+        let call = {
+            let mut calls = fake
+                .calls
+                .lock()
+                .expect("call count should not be poisoned");
+            *calls += 1;
+            *calls
+        };
+        for _ in 0..call {
+            fake.metrics.increment_uuid_requests();
+        }
+        drop(fake.totals.send(total));
+        if call == 1 {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::NO_CONTENT
+        }
+    }
+
+    #[tokio::test]
+    async fn keeps_counters_until_a_report_is_delivered() {
+        let metrics = Arc::new(Metrics::default());
+        let (totals, mut received) = mpsc::unbounded_channel();
+        let fake = FakeWebhook {
+            metrics: Arc::clone(&metrics),
+            calls: Arc::new(Mutex::new(0)),
+            totals,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake webhook should bind");
+        let url = Url::parse(&format!(
+            "http://{}/",
+            listener
+                .local_addr()
+                .expect("fake webhook should have an address")
+        ))
+        .expect("fake webhook URL should parse");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/", post(webhook)).with_state(fake),
+            )
+            .await
+            .expect("fake webhook should run");
+        });
+
+        let reporter = DiscordReporter::spawn(
+            http_client_builder(Duration::from_secs(5))
+                .build()
+                .expect("test HTTP client should build"),
+            url,
+            Arc::clone(&metrics),
+            Duration::from_millis(10),
+        );
+        for _ in 0..3 {
+            metrics.increment_uuid_requests();
+        }
+
+        let mut reports = Vec::new();
+        for _ in 0..3 {
+            let total = tokio::time::timeout(Duration::from_secs(5), received.recv())
+                .await
+                .expect("the reporter should keep sending reports")
+                .expect("the fake webhook should stay up");
+            reports.push(total);
+        }
+        reporter.shutdown().await;
+        server.abort();
+
+        // The second report still includes the 3 requests of the failed first report. After
+        // it succeeds, the third report only covers the 2 requests added during that send.
+        assert_eq!(
+            reports,
+            ["**Total:** 3", "**Total:** 4", "**Total:** 2"],
+            "a failed send must not drop its counters"
+        );
     }
 }
