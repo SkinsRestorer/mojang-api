@@ -17,8 +17,9 @@ use ipnet::IpNet;
 use serde::Serialize;
 use tower_http::{
     cors::{Any, CorsLayer},
-    trace::TraceLayer,
+    trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
 };
+use tracing::Level;
 use utoipa::OpenApi;
 
 use crate::{
@@ -122,7 +123,13 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
                 .expose_headers(Any),
         )
         .layer(middleware::map_response(set_nosniff))
-        .layer(TraceLayer::new_for_http())
+        // An info span adds the method and path to every log line of a request. 5xx responses
+        // log at warn: the code that caused them already logs the cause at its own level.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
+        )
 }
 
 #[utoipa::path(
