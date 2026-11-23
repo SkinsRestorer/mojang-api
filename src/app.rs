@@ -126,9 +126,10 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
 #[utoipa::path(
     get,
     path = "/mojang/uuid/{name}",
-    params(("name" = String, Path, description = "Minecraft username to convert to UUID")),
+    params(("name" = String, Path, description = "Minecraft username to convert to UUID", example = "Pistonmaster")),
     responses(
-        (status = 200, description = "`exists` is `false` when no player has this name", body = UuidLookupResponse),
+        (status = 200, description = "`exists` is `false` when no player has this name", body = UuidLookupResponse,
+            headers(("Cache-Control" = String, description = "`public, max-age=900` when `exists` is `true`, otherwise `public, max-age=60`"))),
         (status = 400, description = "The name is not 1 to 16 characters of `A-Z`, `a-z`, `0-9`, `_`, or `-`", body = ErrorResponse,
             example = json!({"error": "INVALID_NAME"})),
         (status = 429, description = "The client exceeded the rate limit", body = ErrorResponse,
@@ -168,9 +169,10 @@ async fn lookup_uuid(
 #[utoipa::path(
     get,
     path = "/mojang/skin/{uuid}",
-    params(("uuid" = String, Path, description = "Minecraft UUID to get skin data for")),
+    params(("uuid" = String, Path, description = "Minecraft UUID to get skin data for, with or without dashes", example = "b1ae0778-4817-436c-96a3-a72c67cda060")),
     responses(
-        (status = 200, description = "`exists` is `false` when the profile or its skin does not exist", body = SkinLookupResponse),
+        (status = 200, description = "`exists` is `false` when the profile or its skin does not exist", body = SkinLookupResponse,
+            headers(("Cache-Control" = String, description = "`public, max-age=900` when `exists` is `true`, otherwise `public, max-age=60`"))),
         (status = 400, description = "The UUID is not 32 hex digits, with or without dashes", body = ErrorResponse,
             example = json!({"error": "INVALID_UUID"})),
         (status = 429, description = "The client exceeded the rate limit", body = ErrorResponse,

@@ -5,7 +5,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct UuidLookupResponse {
     pub exists: bool,
-    #[schema(example = "b1ae0778-4817-436c-96a3-a72c67cda060")]
+    /// `null` when `exists` is `false`.
+    #[schema(required, example = "b1ae0778-4817-436c-96a3-a72c67cda060")]
     pub uuid: Option<Uuid>,
 }
 
@@ -13,6 +14,8 @@ pub struct UuidLookupResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SkinLookupResponse {
     pub exists: bool,
+    /// `null` when `exists` is `false`.
+    #[schema(required)]
     pub skin_property: Option<SkinProperty>,
 }
 
@@ -80,4 +83,39 @@ pub(crate) struct HealthResponse {
 pub(crate) enum HealthStatus {
     Up,
     Down,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+    use utoipa::PartialSchema;
+
+    use super::{SkinLookupResponse, UuidLookupResponse};
+
+    fn assert_every_field_required<T: PartialSchema + serde::Serialize>(value: &T) {
+        let schema = serde_json::to_value(T::schema()).expect("schema should serialize");
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("schema should list required fields");
+        let body = serde_json::to_value(value).expect("value should serialize");
+        for field in body.as_object().expect("body should be an object").keys() {
+            assert!(
+                required.iter().any(|name| name == field.as_str()),
+                "`{field}` is always sent, so the schema should require it"
+            );
+        }
+    }
+
+    #[test]
+    fn schemas_require_fields_that_are_sent_as_null() {
+        assert_every_field_required(&UuidLookupResponse {
+            exists: false,
+            uuid: None,
+        });
+        assert_every_field_required(&SkinLookupResponse {
+            exists: false,
+            skin_property: None,
+        });
+    }
 }
