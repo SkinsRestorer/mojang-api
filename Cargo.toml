@@ -25,7 +25,14 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "deflate",
   "gzip",
   "json",
-  "rustls",
+  "rustls-no-provider",
+] }
+# reqwest's `rustls` feature uses aws-lc-rs, whose C build is slow. The `ring`
+# provider builds much faster and is installed in `http_client_builder`.
+rustls = { version = "0.23.46", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
