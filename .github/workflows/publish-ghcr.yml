@@ -28,7 +28,6 @@ jobs:
     needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
-      fail-fast: true
       matrix:
         include:
           - arch: amd64
@@ -94,10 +93,6 @@ jobs:
 
           railpack build --name "$tag" .
           docker push "$tag"
-
-      - name: Stop BuildKit
-        if: always()
-        run: docker rm -f railpack-buildkit || true
 
   publish:
     name: Publish multi-arch image
