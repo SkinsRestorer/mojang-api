@@ -382,7 +382,7 @@ mod tests {
 
     use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
     use reqwest::Url;
-    use tokio::sync::mpsc;
+    use tokio::{sync::mpsc, task::JoinHandle};
 
     use super::{
         DiscordReporter, build_report, format_bytes, format_duration, format_number,
@@ -512,15 +512,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn keeps_counters_until_a_report_is_delivered() {
-        let metrics = Arc::new(Metrics::default());
-        let (totals, mut received) = mpsc::unbounded_channel();
-        let fake = FakeWebhook {
-            metrics: Arc::clone(&metrics),
-            calls: Arc::new(Mutex::new(0)),
-            totals,
-        };
+    /// Serves a fake webhook and returns its URL.
+    async fn serve_webhook(router: Router) -> (Url, JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("fake webhook should bind");
@@ -532,22 +525,38 @@ mod tests {
         ))
         .expect("fake webhook URL should parse");
         let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                Router::new().route("/", post(webhook)).with_state(fake),
-            )
-            .await
-            .expect("fake webhook should run");
+            axum::serve(listener, router)
+                .await
+                .expect("fake webhook should run");
         });
+        (url, server)
+    }
 
-        let reporter = DiscordReporter::spawn(
-            http_client_builder(Duration::from_secs(5))
+    /// Starts a reporter that sends a report every 10 ms and waits up to a minute for each.
+    fn start_reporter(url: Url, metrics: Arc<Metrics>) -> DiscordReporter {
+        DiscordReporter::spawn(
+            http_client_builder(Duration::from_mins(1))
                 .build()
                 .expect("test HTTP client should build"),
             url,
-            Arc::clone(&metrics),
+            metrics,
             Duration::from_millis(10),
-        );
+        )
+    }
+
+    #[tokio::test]
+    async fn keeps_counters_until_a_report_is_delivered() {
+        let metrics = Arc::new(Metrics::default());
+        let (totals, mut received) = mpsc::unbounded_channel();
+        let fake = FakeWebhook {
+            metrics: Arc::clone(&metrics),
+            calls: Arc::new(Mutex::new(0)),
+            totals,
+        };
+        let (url, server) =
+            serve_webhook(Router::new().route("/", post(webhook)).with_state(fake)).await;
+
+        let reporter = start_reporter(url, Arc::clone(&metrics));
         for _ in 0..3 {
             metrics.increment_uuid_requests();
         }
@@ -570,5 +579,27 @@ mod tests {
             ["**Total:** 3", "**Total:** 4", "**Total:** 2"],
             "a failed send must not drop its counters"
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_does_not_wait_for_a_slow_webhook() {
+        let (started, mut sends) = mpsc::unbounded_channel();
+        let never_answers = move || {
+            started
+                .send(())
+                .expect("the test should still wait for the report");
+            std::future::pending::<StatusCode>()
+        };
+        let (url, server) = serve_webhook(Router::new().route("/", post(never_answers))).await;
+        let reporter = start_reporter(url, Arc::new(Metrics::default()));
+
+        tokio::time::timeout(Duration::from_secs(5), sends.recv())
+            .await
+            .expect("the reporter should send a report")
+            .expect("the fake webhook should stay up");
+        tokio::time::timeout(Duration::from_secs(5), reporter.shutdown())
+            .await
+            .expect("shutdown should cancel the pending report");
+        server.abort();
     }
 }

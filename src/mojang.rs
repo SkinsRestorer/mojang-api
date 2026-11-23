@@ -718,33 +718,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reports_unexpected_batch_statuses() {
+        let client = fixture(
+            Router::new().route("/bulk", post(|| async { StatusCode::SERVICE_UNAVAILABLE })),
+        )
+        .await;
+
+        assert_eq!(
+            client.lookup_names(&["pistonmaster".to_owned()]).await,
+            Err(UpstreamError::HttpStatus(503))
+        );
+    }
+
+    /// Returns the delay of a rate-limited lookup.
+    fn retry_after(result: Result<Option<SkinProperty>, UpstreamError>) -> Duration {
+        match result {
+            Err(UpstreamError::RateLimited { retry_after }) => retry_after,
+            other => panic!("the lookup should be rate-limited: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn backs_off_after_mojang_rate_limits_a_route() {
         let hits = Arc::new(AtomicUsize::new(0));
         let client = fixture(
             Router::new()
                 .route("/profile/{uuid}", get(rate_limited))
+                .route("/bulk", post(bulk))
                 .with_state(Arc::clone(&hits)),
         )
         .await;
 
-        assert_eq!(
-            client.lookup_skin(uuid(PLAYER)).await,
-            Err(UpstreamError::RateLimited {
-                retry_after: Duration::from_secs(120)
-            })
+        // The delay is measured again after the 429, so a millisecond may have passed.
+        let delay = retry_after(client.lookup_skin(uuid(PLAYER)).await);
+        assert!(
+            delay > Duration::from_secs(119) && delay <= Duration::from_secs(120),
+            "{delay:?}"
         );
         assert!(
-            matches!(
-                client.lookup_skin(uuid(PLAYER)).await,
-                Err(UpstreamError::RateLimited { retry_after })
-                    if retry_after > Duration::from_secs(100)
-            ),
+            retry_after(client.lookup_skin(uuid(PLAYER)).await) > Duration::from_secs(100),
             "the cooldown should short-circuit later requests"
         );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         let snapshot = client.metrics.snapshot();
         assert_eq!(snapshot.mojang_errors, 1);
         assert_eq!(snapshot.mojang_cooldown_rejections, 1);
+        assert_eq!(
+            client.lookup_names(&["pistonmaster".to_owned()]).await,
+            Ok(vec![("Pistonmaster".to_owned(), uuid(PLAYER))]),
+            "Mojang limits each API separately, so name lookups keep working"
+        );
+    }
+
+    #[tokio::test]
+    async fn bounds_the_cooldown_that_mojang_requests() {
+        for (header, expected) in [
+            ("86400", Duration::from_mins(10)),
+            ("0", Duration::from_secs(1)),
+            ("soon", Duration::from_secs(30)),
+        ] {
+            let client = fixture(rate_limiting_proxy(header)).await;
+            let delay = retry_after(client.lookup_skin(uuid(PLAYER)).await);
+            assert!(
+                delay > expected.saturating_sub(Duration::from_secs(1)) && delay <= expected,
+                "Retry-After: {header} gave {delay:?}"
+            );
+        }
     }
 
     #[tokio::test]

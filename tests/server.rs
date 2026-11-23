@@ -1,5 +1,5 @@
 //! Runs the router through the real TCP server, so these tests cover behavior that depends on
-//! `ConnectInfo`, connection handling, and graceful shutdown.
+//! `ConnectInfo` and connection handling.
 
 use std::{
     net::SocketAddr,
@@ -19,7 +19,7 @@ use mojang_api::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Notify, oneshot},
+    sync::oneshot,
     task::JoinHandle,
     time::{Instant, timeout},
 };
@@ -28,14 +28,11 @@ use uuid::Uuid;
 const PLAYER_UUID: &str = "b1ae0778-4817-436c-96a3-a72c67cda060";
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Answers like Mojang for one known player and can hold skin lookups until released.
+/// Answers like Mojang for one known player.
 #[derive(Default)]
 struct FakeMojang {
     name_batches: Mutex<Vec<Vec<String>>>,
     skin_lookups: AtomicUsize,
-    hold_skins: bool,
-    skin_started: Notify,
-    release_skins: Notify,
 }
 
 #[async_trait]
@@ -54,10 +51,6 @@ impl MojangService for FakeMojang {
 
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
         self.skin_lookups.fetch_add(1, Ordering::SeqCst);
-        if self.hold_skins {
-            self.skin_started.notify_one();
-            self.release_skins.notified().await;
-        }
         Ok((uuid == player_uuid()).then(|| SkinProperty {
             value: "texture".to_owned(),
             signature: "signature".to_owned(),
@@ -73,7 +66,7 @@ struct TestServer {
     address: SocketAddr,
     mojang: Arc<FakeMojang>,
     metrics: Arc<Metrics>,
-    stop: Option<oneshot::Sender<()>>,
+    stop: oneshot::Sender<()>,
     task: JoinHandle<()>,
     batch: BatchProcessor,
 }
@@ -114,22 +107,16 @@ impl TestServer {
             address,
             mojang,
             metrics,
-            stop: Some(stop),
+            stop,
             task,
             batch,
         }
     }
 
-    fn begin_shutdown(&mut self) {
+    async fn stop(self) {
         self.stop
-            .take()
-            .expect("shutdown should start once")
             .send(())
             .expect("server should be waiting for shutdown");
-    }
-
-    async fn stop(mut self) {
-        self.begin_shutdown();
         timeout(WAIT, self.task)
             .await
             .expect("server should stop")
@@ -175,7 +162,7 @@ impl HttpResponse {
     }
 }
 
-fn request_bytes(path: &str, extra_headers: &[(&str, &str)], close: bool) -> String {
+fn request_bytes(path: &str, extra_headers: &[(&str, &str)]) -> String {
     let mut request = format!("GET {path} HTTP/1.1\r\nHost: test\r\n");
     for (name, value) in extra_headers {
         request.push_str(name);
@@ -183,16 +170,13 @@ fn request_bytes(path: &str, extra_headers: &[(&str, &str)], close: bool) -> Str
         request.push_str(value);
         request.push_str("\r\n");
     }
-    if close {
-        request.push_str("Connection: close\r\n");
-    }
-    request.push_str("\r\n");
+    request.push_str("Connection: close\r\n\r\n");
     request
 }
 
 async fn send(stream: &mut TcpStream, path: &str, extra_headers: &[(&str, &str)]) {
     stream
-        .write_all(request_bytes(path, extra_headers, true).as_bytes())
+        .write_all(request_bytes(path, extra_headers).as_bytes())
         .await
         .expect("request should be written");
 }
@@ -296,12 +280,12 @@ async fn exhaust_rate_limit(address: SocketAddr, headers: &[(&str, &str)]) {
                 response.json(),
                 serde_json::json!({"error": "RATE_LIMITED"})
             );
+            assert_eq!(response.header("ratelimit-limit"), Some("1000"));
+            assert_eq!(response.header("ratelimit-policy"), Some("1000;w=60"));
             assert_eq!(response.header("ratelimit-remaining"), Some("0"));
-            assert!(
-                response.header("retry-after").is_some(),
-                "{}",
-                response.head
-            );
+            // The quota is empty for a full window, and the next request is due within 60 ms.
+            assert_eq!(response.header("ratelimit-reset"), Some("60"));
+            assert_eq!(response.header("retry-after"), Some("1"));
             break;
         }
         assert_eq!(response.status, 400, "{}", response.body);
@@ -368,67 +352,6 @@ async fn rate_limits_forwarded_clients_separately_behind_a_trusted_proxy() {
     );
 
     server.stop().await;
-}
-
-#[tokio::test]
-async fn graceful_shutdown_drains_in_flight_requests_and_closes_idle_connections() {
-    let mut server = TestServer::start(
-        FakeMojang {
-            hold_skins: true,
-            ..FakeMojang::default()
-        },
-        Vec::new(),
-    )
-    .await;
-
-    // An idle keep-alive connection must not hold up shutdown.
-    let mut idle = TcpStream::connect(server.address)
-        .await
-        .expect("idle client should connect");
-    idle.write_all(request_bytes("/health", &[], false).as_bytes())
-        .await
-        .expect("request should be written");
-    let mut first_response = [0_u8; 12];
-    idle.read_exact(&mut first_response)
-        .await
-        .expect("idle client should receive a response");
-    assert_eq!(&first_response, b"HTTP/1.1 200");
-
-    let mut in_flight = TcpStream::connect(server.address)
-        .await
-        .expect("client should connect");
-    send(&mut in_flight, &format!("/mojang/skin/{PLAYER_UUID}"), &[]).await;
-    timeout(WAIT, server.mojang.skin_started.notified())
-        .await
-        .expect("the skin lookup should start");
-
-    server.begin_shutdown();
-    // The server must keep waiting while a request is still running.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(
-        !server.task.is_finished(),
-        "shutdown should wait for requests"
-    );
-    assert!(
-        TcpStream::connect(server.address).await.is_err(),
-        "the server should stop accepting connections"
-    );
-
-    server.mojang.release_skins.notify_one();
-    let response = read_response(&mut in_flight).await;
-    assert_eq!(response.status, 200, "{}", response.body);
-    assert_eq!(response.json()["exists"], true);
-
-    timeout(WAIT, &mut server.task)
-        .await
-        .expect("server should stop after draining")
-        .expect("server task should not panic");
-    let mut rest = Vec::new();
-    timeout(WAIT, idle.read_to_end(&mut rest))
-        .await
-        .expect("idle connection should be closed")
-        .expect("idle connection should close cleanly");
-    server.batch.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

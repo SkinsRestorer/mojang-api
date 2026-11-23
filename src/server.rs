@@ -210,6 +210,10 @@ mod tests {
             !task.is_finished(),
             "server should wait for the in-flight request"
         );
+        assert!(
+            TcpStream::connect(address).await.is_err(),
+            "server should stop accepting connections"
+        );
 
         release.notify_one();
         let mut response = String::new();

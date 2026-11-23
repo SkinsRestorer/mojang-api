@@ -396,7 +396,7 @@ mod tests {
         types::SkinProperty,
     };
 
-    use super::{BatchConfig, BatchConfigError, BatchProcessor, PendingLookup};
+    use super::{BatchConfig, BatchConfigError, BatchProcessor, LOOKUP_TIMEOUT, PendingLookup};
 
     #[derive(Default)]
     struct FakeMojangService {
@@ -595,7 +595,7 @@ mod tests {
         processor.shutdown().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn flushes_immediately_when_batch_is_full() {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
@@ -652,6 +652,69 @@ mod tests {
             (snapshot.uuid_cache_hits, snapshot.uuid_cache_misses),
             (0, 1),
             "a failed lookup still counts as a cache miss"
+        );
+
+        drop(lookup);
+        processor.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn times_out_lookups_that_mojang_does_not_answer() {
+        let service = Arc::new(BlockingMojangService::default());
+        let processor = BatchProcessor::start(
+            Arc::<BlockingMojangService>::clone(&service),
+            CacheManager::default(),
+            Arc::new(Metrics::default()),
+            test_config(1),
+        );
+        let lookup = processor.lookup();
+
+        let started = tokio::time::Instant::now();
+        assert_eq!(
+            lookup.lookup("Pistonmaster".to_owned()).await,
+            Err(UpstreamError::Timeout)
+        );
+        assert!(started.elapsed() >= LOOKUP_TIMEOUT);
+
+        service.release.add_permits(1);
+        drop(lookup);
+        processor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn skips_lookups_that_were_canceled_while_queued() {
+        let service = Arc::new(FakeMojangService::default());
+        let processor = BatchProcessor::start(
+            Arc::<FakeMojangService>::clone(&service),
+            CacheManager::default(),
+            Arc::new(Metrics::default()),
+            BatchConfig::new(2, Duration::from_secs(30), 32, 2)
+                .expect("test batch configuration should be valid"),
+        );
+        let lookup = processor.lookup();
+        let (response, receiver) = oneshot::channel();
+        drop(receiver);
+        assert!(
+            lookup
+                .sender
+                .try_send(PendingLookup {
+                    name: "canceled".to_owned(),
+                    response,
+                })
+                .is_ok(),
+            "the queue should accept the canceled lookup"
+        );
+
+        // The second lookup fills the batch.
+        assert_eq!(lookup.lookup("Pistonmaster".to_owned()).await, Ok(None));
+        assert_eq!(
+            service
+                .calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            &[vec!["pistonmaster".to_owned()]],
+            "Mojang should not be asked for names that nobody waits for"
         );
 
         drop(lookup);
@@ -751,7 +814,7 @@ mod tests {
         processor.shutdown().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn shutdown_answers_lookups_that_are_still_queued() {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
@@ -766,10 +829,9 @@ mod tests {
             let lookup = lookup.clone();
             tokio::spawn(async move { lookup.lookup(name.to_owned()).await })
         });
-        // Let both lookups reach the queue before the long batch interval elapses.
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
-        }
+        // With paused time, the clock only advances once every task waits, so both lookups
+        // reach the processor long before the batch interval elapses.
+        tokio::time::sleep(Duration::from_millis(1)).await;
 
         tokio::time::timeout(Duration::from_secs(1), processor.shutdown())
             .await
@@ -787,7 +849,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn shutdown_closes_external_lookup_handles() {
         let processor = BatchProcessor::start(
             Arc::new(FakeMojangService::default()),

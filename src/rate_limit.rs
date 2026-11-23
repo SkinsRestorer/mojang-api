@@ -359,6 +359,17 @@ mod tests {
             address("10.1.1.1"),
             "a trusted peer without the header is limited by its own address"
         );
+        // A dual-stack listener reports IPv4 clients as IPv4-mapped IPv6 addresses, which
+        // must not share one IPv6 /64 key.
+        assert_eq!(
+            limiter.client_key(Some(address("::ffff:203.0.113.5")), &HeaderMap::new()),
+            address("203.0.113.5")
+        );
+        assert_eq!(
+            limiter.client_key(Some(address("::ffff:10.1.1.1")), &headers),
+            address("198.51.100.7"),
+            "a mapped proxy address is still trusted"
+        );
     }
 
     #[test]
