@@ -1,7 +1,14 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
-use std::{env, num::ParseIntError, path::PathBuf, time::Duration};
+use std::{
+    env,
+    ffi::OsString,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    path::PathBuf,
+    time::Duration,
+};
 
+use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use reqwest::Url;
 use thiserror::Error;
 
@@ -39,6 +46,8 @@ pub struct Config {
     pub server_port: u16,
     pub proxy_list_file: Option<PathBuf>,
     pub discord_webhook: Option<Url>,
+    /// Peers whose `CF-Connecting-IP` header is trusted as the client address.
+    pub trusted_proxies: Vec<IpNet>,
     pub endpoints: MojangEndpoints,
     pub request_timeout: Duration,
     pub batch_size: usize,
@@ -50,27 +59,52 @@ pub struct Config {
 impl Config {
     /// Loads application settings from environment variables.
     ///
+    /// Variables that are set to an empty or blank value are treated as unset.
+    ///
     /// # Errors
     ///
-    /// Returns an error when a configured port, `DISCORD_WEBHOOK`, or a built-in endpoint is
-    /// invalid.
+    /// Returns an error when a configured variable is invalid or a built-in endpoint is invalid.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let server_port = env::var("SERVER_PORT")
-            .ok()
-            .or_else(|| env::var("PORT").ok())
-            .map(|value| value.parse())
-            .transpose()?
-            .unwrap_or(DEFAULT_SERVER_PORT);
-        let proxy_list_file = env::var_os("PROXY_LIST_FILE").map(PathBuf::from);
-        let discord_webhook = env::var("DISCORD_WEBHOOK")
-            .ok()
-            .map(|value| Url::parse(&value))
+        Self::from_lookup(|name| env::var_os(name))
+    }
+
+    fn from_lookup(lookup: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
+        let text = |name: &'static str| -> Result<Option<String>, ConfigError> {
+            lookup(name)
+                .map(|value| {
+                    value
+                        .into_string()
+                        .map_err(|_value| ConfigError::NotUnicode { name })
+                })
+                .transpose()
+                .map(|value| {
+                    value
+                        .map(|value| value.trim().to_owned())
+                        .filter(|value| !value.is_empty())
+                })
+        };
+
+        let server_port = match (text("SERVER_PORT")?, text("PORT")?) {
+            (Some(value), _) => parse_port("SERVER_PORT", &value)?,
+            (None, Some(value)) => parse_port("PORT", &value)?,
+            (None, None) => DEFAULT_SERVER_PORT,
+        };
+        let proxy_list_file = lookup("PROXY_LIST_FILE")
+            .filter(|value| !value.to_string_lossy().trim().is_empty())
+            .map(PathBuf::from);
+        let discord_webhook = text("DISCORD_WEBHOOK")?
+            .map(|value| parse_discord_webhook(&value))
             .transpose()?;
+        let trusted_proxies = text("TRUSTED_PROXIES")?.map_or_else(
+            || Ok(default_trusted_proxies()),
+            |value| parse_trusted_proxies(&value),
+        )?;
 
         Ok(Self {
             server_port,
             proxy_list_file,
             discord_webhook,
+            trusted_proxies,
             endpoints: MojangEndpoints::production()?,
             request_timeout: Duration::from_secs(15),
             batch_size: DEFAULT_BATCH_SIZE,
@@ -81,10 +115,178 @@ impl Config {
     }
 }
 
+fn parse_port(name: &'static str, value: &str) -> Result<u16, ConfigError> {
+    value
+        .parse()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or_else(|| ConfigError::InvalidPort {
+            name,
+            value: value.to_owned(),
+        })
+}
+
+fn parse_discord_webhook(value: &str) -> Result<Url, ConfigError> {
+    // The webhook URL contains a secret token, so errors never include the value.
+    Url::parse(value)
+        .ok()
+        .filter(|url| url.scheme() == "https" && url.host().is_some())
+        .ok_or(ConfigError::InvalidDiscordWebhook)
+}
+
+fn parse_trusted_proxies(value: &str) -> Result<Vec<IpNet>, ConfigError> {
+    if value.eq_ignore_ascii_case("none") {
+        return Ok(Vec::new());
+    }
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<IpNet>()
+                .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+                .map(|network| network.trunc())
+                .map_err(|_error| ConfigError::InvalidTrustedProxy {
+                    value: entry.to_owned(),
+                })
+        })
+        .collect()
+}
+
+/// Loopback and private ranges, which covers a reverse proxy on the same host or network.
+fn default_trusted_proxies() -> Vec<IpNet> {
+    let v4 = |address: Ipv4Addr, prefix| Ipv4Net::new_assert(address, prefix).into();
+    let v6 = |address: Ipv6Addr, prefix| Ipv6Net::new_assert(address, prefix).into();
+    vec![
+        v4(Ipv4Addr::new(127, 0, 0, 0), 8),
+        v4(Ipv4Addr::new(10, 0, 0, 0), 8),
+        v4(Ipv4Addr::new(172, 16, 0, 0), 12),
+        v4(Ipv4Addr::new(192, 168, 0, 0), 16),
+        v6(Ipv6Addr::LOCALHOST, 128),
+        v6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+    ]
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("SERVER_PORT or PORT must be a valid TCP port")]
-    InvalidPort(#[from] ParseIntError),
-    #[error("an application URL is invalid")]
-    InvalidUrl(#[from] url::ParseError),
+    #[error("{name} must contain valid Unicode")]
+    NotUnicode { name: &'static str },
+    #[error("{name} must be a TCP port from 1 to 65535, but it is {value:?}")]
+    InvalidPort { name: &'static str, value: String },
+    #[error("DISCORD_WEBHOOK must be an absolute https:// URL")]
+    InvalidDiscordWebhook,
+    #[error("TRUSTED_PROXIES contains an invalid IP address or CIDR range: {value:?}")]
+    InvalidTrustedProxy { value: String },
+    #[error("a built-in Mojang endpoint URL is invalid")]
+    InvalidEndpoint(#[from] url::ParseError),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, ffi::OsString, net::IpAddr, path::PathBuf};
+
+    use super::{Config, ConfigError};
+
+    fn load(variables: &[(&str, &str)]) -> Result<Config, ConfigError> {
+        let variables: HashMap<String, OsString> = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
+            .collect();
+        Config::from_lookup(|name| variables.get(name).cloned())
+    }
+
+    fn trusts(config: &Config, address: &str) -> bool {
+        let address: IpAddr = address.parse().expect("test address should parse");
+        config
+            .trusted_proxies
+            .iter()
+            .any(|network| network.contains(&address))
+    }
+
+    #[test]
+    fn uses_defaults_when_variables_are_missing_or_blank() {
+        for variables in [
+            &[][..],
+            &[
+                ("SERVER_PORT", ""),
+                ("PORT", " "),
+                ("DISCORD_WEBHOOK", ""),
+                ("PROXY_LIST_FILE", ""),
+                ("TRUSTED_PROXIES", ""),
+            ][..],
+        ] {
+            let config = load(variables).expect("defaults should be valid");
+            assert_eq!(config.server_port, 3000);
+            assert!(config.discord_webhook.is_none(), "webhook should be unset");
+            assert!(
+                config.proxy_list_file.is_none(),
+                "proxy file should be unset"
+            );
+            assert!(trusts(&config, "10.1.2.3"), "private peers are trusted");
+            assert!(trusts(&config, "::1"), "loopback is trusted");
+            assert!(!trusts(&config, "203.0.113.7"), "public peers are not");
+        }
+    }
+
+    #[test]
+    fn prefers_server_port_over_port() {
+        let config = load(&[("SERVER_PORT", "8080"), ("PORT", "9090")])
+            .expect("configuration should be valid");
+        assert_eq!(config.server_port, 8080);
+
+        let config = load(&[("PORT", "9090")]).expect("configuration should be valid");
+        assert_eq!(config.server_port, 9090);
+    }
+
+    #[test]
+    fn names_the_invalid_port_variable() {
+        for (name, value) in [("SERVER_PORT", "0"), ("PORT", "http"), ("PORT", "70000")] {
+            let error = load(&[(name, value)]).expect_err("port should be rejected");
+            assert_eq!(
+                error.to_string(),
+                format!("{name} must be a TCP port from 1 to 65535, but it is {value:?}")
+            );
+        }
+    }
+
+    #[test]
+    fn requires_an_https_discord_webhook() {
+        for value in ["http://discord.example/api/webhooks/1/token", "not a url"] {
+            assert!(matches!(
+                load(&[("DISCORD_WEBHOOK", value)]),
+                Err(ConfigError::InvalidDiscordWebhook)
+            ));
+        }
+        let config = load(&[(
+            "DISCORD_WEBHOOK",
+            "https://discord.example/api/webhooks/1/token",
+        )])
+        .expect("an https webhook should be valid");
+        assert!(config.discord_webhook.is_some(), "webhook should be set");
+    }
+
+    #[test]
+    fn parses_trusted_proxy_lists() {
+        let config = load(&[("TRUSTED_PROXIES", "203.0.113.0/24, 2001:db8::1")])
+            .expect("trusted proxies should parse");
+        assert!(trusts(&config, "203.0.113.9"), "range member is trusted");
+        assert!(trusts(&config, "2001:db8::1"), "single address is trusted");
+        assert!(!trusts(&config, "10.0.0.1"), "defaults are replaced");
+
+        let config = load(&[("TRUSTED_PROXIES", "none")]).expect("none should parse");
+        assert!(config.trusted_proxies.is_empty(), "no peer is trusted");
+
+        assert!(matches!(
+            load(&[("TRUSTED_PROXIES", "10.0.0.0/8,proxy")]),
+            Err(ConfigError::InvalidTrustedProxy { value }) if value == "proxy"
+        ));
+    }
+
+    #[test]
+    fn reads_the_proxy_list_path() {
+        let config =
+            load(&[("PROXY_LIST_FILE", "proxies.txt")]).expect("configuration should be valid");
+        assert_eq!(config.proxy_list_file, Some(PathBuf::from("proxies.txt")));
+    }
 }
