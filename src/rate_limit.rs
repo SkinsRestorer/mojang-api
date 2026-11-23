@@ -472,14 +472,30 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    /// Returns how many clients the shard that holds `key` tracks.
+    fn clients_in_shard_of(limiter: &RateLimiter, key: IpAddr) -> usize {
+        limiter
+            .shards
+            .iter()
+            .map(|shard| {
+                shard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            })
+            .find(|state| state.clients.get(key).is_some())
+            .map(|state| state.clients.len())
+            .expect("a checked client should be tracked")
+    }
+
     #[test]
     fn bounds_memory_per_shard() {
-        let limiter = limiter(1, Duration::from_hours(1));
-        let now = Instant::now();
-        for index in 0..u32::try_from(MAX_CLIENTS_PER_SHARD * RATE_LIMIT_SHARDS * 2)
-            .expect("test size should fit")
-        {
-            limiter.check(IpAddr::V4(Ipv4Addr::from_bits(index)), now);
+        // A full quota refills after 60 ms, so every client below is idle again after that.
+        let limiter = limiter(1_000, Duration::from_mins(1));
+        let start = Instant::now();
+        let clients = u32::try_from(MAX_CLIENTS_PER_SHARD * RATE_LIMIT_SHARDS * 2)
+            .expect("test size should fit");
+        for index in 0..clients {
+            limiter.check(IpAddr::V4(Ipv4Addr::from_bits(index)), start);
         }
         for shard in &limiter.shards {
             let clients = shard
@@ -487,8 +503,52 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clients
                 .len();
-            assert!(clients <= MAX_CLIENTS_PER_SHARD, "shard holds {clients}");
+            assert_eq!(clients, MAX_CLIENTS_PER_SHARD, "every shard should fill up");
         }
+
+        // Scanning a full shard is slow, so idle clients are only cleared once per second.
+        let early = IpAddr::V4(Ipv4Addr::from_bits(clients));
+        limiter.check(early, start + Duration::from_millis(500));
+        assert_eq!(clients_in_shard_of(&limiter, early), MAX_CLIENTS_PER_SHARD);
+
+        let late = IpAddr::V4(Ipv4Addr::from_bits(clients + 1));
+        limiter.check(late, start + Duration::from_millis(1_500));
+        assert_eq!(
+            clients_in_shard_of(&limiter, late),
+            1,
+            "a full shard should drop idle clients before it evicts active ones"
+        );
+    }
+
+    #[test]
+    fn forgets_idle_clients_once_per_window() {
+        let limiter = limiter(1, Duration::from_mins(1));
+        let start = Instant::now();
+        for index in 0..1_000 {
+            limiter.check(IpAddr::V4(Ipv4Addr::from_bits(index)), start);
+        }
+        let tracked: usize = limiter
+            .shards
+            .iter()
+            .map(|shard| {
+                shard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clients
+                    .len()
+            })
+            .sum();
+        assert_eq!(tracked, 1_000, "shards below the cap keep every client");
+
+        let returning = IpAddr::V4(Ipv4Addr::from_bits(0));
+        assert!(
+            !limiter
+                .check(returning, start + Duration::from_secs(30))
+                .allowed
+        );
+        let next_window = start + Duration::from_secs(61);
+        assert!(limiter.check(returning, next_window).allowed);
+        assert_eq!(clients_in_shard_of(&limiter, returning), 1);
     }
 
     /// Returns `count` distinct IPv4 clients that share a shard with `target`.

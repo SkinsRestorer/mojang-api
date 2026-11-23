@@ -769,7 +769,7 @@ mod tests {
 
     use super::{
         MojangEndpoints, MojangHttpClient, MojangService, ProxyParseError, UpstreamError,
-        parse_proxy_url, retry_timeout, try_extend_body,
+        load_proxy_list, parse_proxy_url, retry_timeout, try_extend_body,
     };
 
     const PLAYER: &str = "b1ae07784817436c96a3a72c67cda060";
@@ -778,12 +778,17 @@ mod tests {
     const BROKEN: &str = "00000000000000000000000000000500";
     const UNSIGNED: &str = "000000000000000000000000000000aa";
 
+    /// A texture as large as a real one, so responses exceed a few kilobytes.
+    fn texture() -> String {
+        "texture".repeat(1_000)
+    }
+
     /// Like Mojang, signs the textures only when the request asks for `unsigned=false`.
     async fn profile(Path(uuid): Path<String>, uri: Uri) -> Response {
         let textures = if uri.query() == Some("unsigned=false") {
-            json!({ "name": "textures", "value": "texture", "signature": "signature" })
+            json!({ "name": "textures", "value": texture(), "signature": "signature" })
         } else {
-            json!({ "name": "textures", "value": "texture" })
+            json!({ "name": "textures", "value": texture() })
         };
         match uuid.as_str() {
             PLAYER => Json(json!({
@@ -911,7 +916,7 @@ mod tests {
         assert_eq!(
             client.lookup_skin(uuid(PLAYER)).await,
             Ok(Some(SkinProperty {
-                value: "texture".to_owned(),
+                value: texture(),
                 signature: "signature".to_owned(),
             }))
         );
@@ -994,6 +999,11 @@ mod tests {
             delay > Duration::from_secs(119) && delay <= Duration::from_secs(120),
             "{delay:?}"
         );
+        assert_eq!(
+            client.metrics.snapshot().mojang_cooldown_rejections,
+            0,
+            "a request that reached Mojang was not rejected by the cooldown"
+        );
         assert!(
             retry_after(client.lookup_skin(uuid(PLAYER)).await) > Duration::from_secs(100),
             "the cooldown should short-circuit later requests"
@@ -1030,6 +1040,16 @@ mod tests {
                 delay > expected.saturating_sub(Duration::from_secs(1)) && delay <= expected,
                 "Retry-After: {header} gave {delay:?}"
             );
+            if expected == Duration::from_secs(1) {
+                tokio::time::sleep(Duration::from_millis(1_100)).await;
+                retry_after(client.lookup_skin(uuid(PLAYER)).await);
+                let snapshot = client.metrics.snapshot();
+                assert_eq!(
+                    snapshot.mojang_errors, 2,
+                    "the route should reach Mojang again after its cooldown"
+                );
+                assert_eq!(snapshot.mojang_cooldown_rejections, 0);
+            }
         }
     }
 
@@ -1198,6 +1218,32 @@ mod tests {
         let percent = parse_proxy_url("proxy.example:3128:us%er:p%41ss").expect("should parse");
         assert_eq!(percent.username(), "us%25er");
         assert_eq!(percent.password(), Some("p%2541ss"));
+
+        let path = std::env::temp_dir().join(format!("mojang-api-proxies-{}", std::process::id()));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "This synchronous test writes the file before any runtime starts."
+        )]
+        std::fs::write(
+            &path,
+            "127.0.0.1:8080\n\n  127.0.0.1:8080  \nnot a proxy\nproxy.example:3128:user:pass\n",
+        )
+        .expect("proxy list should be written");
+        let loaded = load_proxy_list(&path);
+        std::fs::remove_file(&path).expect("proxy list should be removed");
+        let loaded: Vec<String> = loaded
+            .expect("proxy list should load")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            loaded,
+            [
+                "http://127.0.0.1:8080/",
+                "http://user:pass@proxy.example:3128/"
+            ],
+            "the list should skip blank, duplicate, and invalid entries"
+        );
     }
 
     #[test]
@@ -1241,6 +1287,11 @@ mod tests {
         assert!(
             parse_proxy_url("https://127.0.0.1:8080").is_err(),
             "only HTTP proxies are supported"
+        );
+        assert_eq!(
+            parse_proxy_url("127.0.0.1:8080::password"),
+            Err(ProxyParseError::Format),
+            "a password needs a username"
         );
         for entry in [
             "::1:8080",
