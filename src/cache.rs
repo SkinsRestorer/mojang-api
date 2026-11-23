@@ -8,10 +8,10 @@ use crate::types::SkinProperty;
 const NAME_CACHE_CAPACITY: u64 = 100_000;
 const SKIN_CACHE_CAPACITY_BYTES: u64 = 32 * 1024 * 1024;
 /// A name keeps its UUID until the player renames, which Mojang limits to every 30 days.
-const POSITIVE_NAME_TTL: Duration = Duration::from_hours(6);
+pub(crate) const POSITIVE_NAME_TTL: Duration = Duration::from_hours(6);
 /// Players can change skins at any time, so skins expire sooner than names.
-const POSITIVE_SKIN_TTL: Duration = Duration::from_hours(1);
-const NEGATIVE_CACHE_TTL: Duration = Duration::from_mins(15);
+pub(crate) const POSITIVE_SKIN_TTL: Duration = Duration::from_hours(1);
+pub(crate) const NEGATIVE_CACHE_TTL: Duration = Duration::from_mins(15);
 const SKIN_ENTRY_OVERHEAD_BYTES: usize = 128;
 
 /// Caches name-to-UUID and UUID-to-skin lookups.

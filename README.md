@@ -96,7 +96,7 @@ Missing profiles or texture properties return `200 OK` with `exists` set to `fal
 - `GET /openapi` returns the generated OpenAPI document.
 - `GET /swagger` opens Swagger UI. `GET /` redirects to it.
 
-Lookup responses for existing profiles include `Cache-Control: public, max-age=900`. Responses with `exists` set to `false` include `Cache-Control: public, max-age=60`.
+Lookup responses for existing profiles include `Cache-Control: public, max-age=900`. Responses with `exists` set to `false` include `Cache-Control: public, max-age=60`. These lifetimes are fixed and shorter than the server cache TTLs. A client copy can outlive the server entry it came from, so a result can be up to the server TTL plus `max-age` old.
 
 ### Errors
 

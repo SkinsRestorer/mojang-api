@@ -53,8 +53,16 @@ const _: () = assert!(
         && UPSTREAM_BUDGET.as_millis() < REQUEST_TIMEOUT.as_millis(),
     "lookups must fail with their own error before the router deadline"
 );
+// Clients get fixed lifetimes because moka does not expose how long an entry has left, and
+// tracking that ourselves would mean storing a timestamp in every cached value. A client copy
+// can therefore outlive the server entry it came from, so the worst-case age a client sees is
+// the server TTL plus `max-age`. Each `max-age` stays at or below the shortest server TTL for
+// its kind of result, which keeps that extra delay small. `stale-while-revalidate` would only
+// add more staleness, and the plugin does not revalidate in the background anyway.
+/// At most 15 extra minutes on top of the one-hour skin and six-hour name TTLs.
 const FOUND_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=900");
-/// Missing profiles may be created soon, so clients should not keep them for long.
+/// Missing profiles may be created soon, so clients should not keep them for long. At most
+/// one extra minute on top of the 15-minute negative TTL.
 const NOT_FOUND_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=60");
 
 #[derive(Serialize)]
@@ -369,7 +377,7 @@ mod tests {
     use axum::{
         body::{Body, to_bytes},
         http::{
-            Method, Request, StatusCode,
+            HeaderValue, Method, Request, StatusCode,
             header::{
                 ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
                 LOCATION, ORIGIN, RETRY_AFTER, X_CONTENT_TYPE_OPTIONS,
@@ -383,7 +391,7 @@ mod tests {
 
     use crate::{
         batch::{BatchConfig, BatchProcessor},
-        cache::CacheManager,
+        cache::{CacheManager, NEGATIVE_CACHE_TTL, POSITIVE_NAME_TTL, POSITIVE_SKIN_TTL},
         metrics::Metrics,
         mojang::{MojangService, UpstreamError},
         types::{
@@ -393,7 +401,10 @@ mod tests {
         validation::{is_valid_minecraft_username, parse_minecraft_uuid},
     };
 
-    use super::{ApiDoc, AppState, build_router, enforce_deadline};
+    use super::{
+        ApiDoc, AppState, FOUND_CACHE_CONTROL, NOT_FOUND_CACHE_CONTROL, build_router,
+        enforce_deadline,
+    };
 
     struct FakeMojangService {
         uuid: Uuid,
@@ -696,6 +707,24 @@ mod tests {
         );
 
         batch.shutdown().await;
+    }
+
+    #[test]
+    fn client_max_age_never_exceeds_server_ttl() {
+        let max_age = |header: &HeaderValue| {
+            let seconds = header
+                .to_str()
+                .expect("header should be ASCII")
+                .strip_prefix("public, max-age=")
+                .expect("header should only set a public max-age")
+                .parse()
+                .expect("max-age should be a number");
+            Duration::from_secs(seconds)
+        };
+
+        let found = max_age(&FOUND_CACHE_CONTROL);
+        assert!(found <= POSITIVE_NAME_TTL.min(POSITIVE_SKIN_TTL));
+        assert!(max_age(&NOT_FOUND_CACHE_CONTROL) <= NEGATIVE_CACHE_TTL);
     }
 
     #[tokio::test]
