@@ -10,5 +10,23 @@
       "matchPackageNames": ["**"],
       "allowedVersions": "!/\\-SNAPSHOT$/"
     }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Railpack release installed by the publish workflow. Update its SHA-256 checksums with the version.",
+      "managerFilePatterns": ["/^\\.github/workflows/publish-ghcr\\.yml$/"],
+      "matchStrings": ["RAILPACK_VERSION: (?<currentValue>v\\S+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "railwayapp/railpack"
+    },
+    {
+      "customType": "regex",
+      "description": "BuildKit image started by the publish workflow.",
+      "managerFilePatterns": ["/^\\.github/workflows/publish-ghcr\\.yml$/"],
+      "matchStrings": ["moby/buildkit:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "moby/buildkit"
+    }
   ]
 }

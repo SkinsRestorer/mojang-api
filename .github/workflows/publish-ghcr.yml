@@ -52,6 +52,8 @@ jobs:
       - name: Install Railpack
         env:
           ARCH: ${{ matrix.arch }}
+          # Renovate updates this version. Its pull request fails until the checksums below match
+          # the new release's checksums.txt.
           RAILPACK_VERSION: v0.43.0
         run: |
           case "$ARCH" in
