@@ -953,6 +953,8 @@ dependencies = [
  "axum",
  "bytes",
  "dotenvy",
+ "hyper",
+ "hyper-util",
  "ipnet",
  "jiff",
  "moka",

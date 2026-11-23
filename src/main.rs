@@ -1,19 +1,28 @@
-use std::{error::Error, future::IntoFuture, sync::Arc, time::Duration};
+use std::{error::Error, process::ExitCode, sync::Arc};
 
 use mojang_api::{
     AppState, BatchConfig, BatchProcessor, CacheManager, Config, Metrics, MojangHttpClient,
-    MojangService, build_router, reporter::DiscordReporter,
+    MojangService, build_router, error::ErrorChain, reporter::DiscordReporter, server,
 };
-use tokio::{signal, sync::oneshot, time::timeout};
-use tracing::{error, info, warn};
+use tokio::{signal, sync::watch};
+use tracing::{error, info, level_filters::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
 
-const HTTP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+type BoxError = Box<dyn Error + Send + Sync>;
 
-fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+fn main() -> ExitCode {
     // Load .env before starting any runtime threads that could read the environment.
     let dotenv = dotenvy::dotenv();
-    initialize_tracing()?;
+    let invalid_log_filter = match initialize_tracing() {
+        Ok(invalid_log_filter) => invalid_log_filter,
+        Err(error) => {
+            eprintln!("could not initialize logging: {}", ErrorChain(&*error));
+            return ExitCode::FAILURE;
+        }
+    };
+    if invalid_log_filter {
+        warn!("RUST_LOG is invalid; using the default info filter");
+    }
     if let Err(error) = dotenv
         && !error.not_found()
     {
@@ -21,6 +30,16 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         warn!("could not load .env");
     }
 
+    match start() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            error!("{}", ErrorChain(&*error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn start() -> Result<(), BoxError> {
     let config = Config::from_env()?;
     let metrics = Arc::new(Metrics::default());
     let cache = CacheManager::default();
@@ -41,7 +60,8 @@ async fn run(
     metrics: Arc<Metrics>,
     cache: CacheManager,
     mojang: Arc<dyn MojangService>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), BoxError> {
+    let signals = listen_for_signals();
     let batch_processor = BatchProcessor::start(
         Arc::clone(&mojang),
         cache.clone(),
@@ -65,59 +85,68 @@ async fn run(
     )?;
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.server_port)).await?;
     info!(
-        port = config.server_port,
+        address = %listener.local_addr()?,
         "server started; Swagger UI is available at /swagger"
     );
 
-    serve_until_shutdown(listener, app).await;
-
-    reporter.shutdown().await;
-    batch_processor.shutdown().await;
-    info!("server stopped");
-    Ok(())
-}
-
-async fn serve_until_shutdown(listener: tokio::net::TcpListener, app: axum::Router) {
-    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "Both a shutdown signal and closure of the channel let the server drain."
-            )]
-            let _ = shutdown_receiver.await;
-        })
-        .into_future();
-    tokio::pin!(server);
-
-    let result = tokio::select! {
-        result = &mut server => Some(result),
-        () = shutdown_signal() => {
-            #[expect(clippy::let_underscore_must_use, reason = "The server may already have dropped its shutdown receiver.")]
-            let _ = shutdown_sender.send(());
-            if let Ok(result) = timeout(HTTP_SHUTDOWN_TIMEOUT, &mut server).await {
-                Some(result)
-            } else {
-                error!("HTTP server did not drain before the shutdown deadline");
-                None
-            }
-        }
+    let first_signal = signal_count(signals.clone(), 1);
+    let graceful_shutdown = async {
+        server::serve(listener, app, first_signal).await;
+        reporter.shutdown().await;
+        batch_processor.shutdown().await;
     };
-
-    if let Some(Err(error)) = result {
-        error!(%error, "HTTP server stopped with an error");
+    tokio::select! {
+        () = graceful_shutdown => {
+            info!("server stopped");
+            Ok(())
+        }
+        () = signal_count(signals, 2) => {
+            Err("received a second shutdown signal; stopping without draining".into())
+        }
     }
 }
 
-fn initialize_tracing() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).try_init()
+/// Counts shutdown signals, so a second signal can force an immediate exit.
+fn listen_for_signals() -> watch::Receiver<u32> {
+    let (sender, receiver) = watch::channel(0_u32);
+    tokio::spawn(async move {
+        loop {
+            shutdown_signal().await;
+            sender.send_modify(|count| *count = count.saturating_add(1));
+            info!("shutdown signal received");
+        }
+    });
+    receiver
+}
+
+async fn signal_count(mut signals: watch::Receiver<u32>, count: u32) {
+    if signals
+        .wait_for(|received| *received >= count)
+        .await
+        .is_err()
+    {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Initializes logging and reports whether `RUST_LOG` was invalid.
+fn initialize_tracing() -> Result<bool, BoxError> {
+    let builder = EnvFilter::builder().with_default_directive(LevelFilter::INFO.into());
+    let (filter, invalid) = match builder.from_env() {
+        Ok(filter) => (filter, false),
+        Err(_) => (EnvFilter::new("info"), true),
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .try_init()?;
+    Ok(invalid)
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(error) = signal::ctrl_c().await {
             error!(%error, "could not install Ctrl+C signal handler");
+            std::future::pending::<()>().await;
         }
     };
 
@@ -141,5 +170,4 @@ async fn shutdown_signal() {
         () = ctrl_c => {},
         () = terminate => {},
     }
-    info!("shutdown signal received");
 }

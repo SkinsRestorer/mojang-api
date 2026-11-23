@@ -8,6 +8,7 @@ pub mod metrics;
 pub mod mojang;
 pub mod rate_limit;
 pub mod reporter;
+pub mod server;
 pub mod types;
 pub mod validation;
 
