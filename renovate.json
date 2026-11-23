@@ -7,8 +7,10 @@
       "automergeType": "branch"
     },
     {
-      "matchPackageNames": ["**"],
-      "allowedVersions": "!/\\-SNAPSHOT$/"
+      "description": "Only the publish workflow on main checks the Railpack checksums, so a passing branch build does not prove the update works. Keep it in its own pull request for manual review.",
+      "matchPackageNames": ["railwayapp/railpack"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "customManagers": [
