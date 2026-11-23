@@ -4,7 +4,7 @@ Mojang API Proxy provides cached Minecraft username and skin lookups. It batches
 
 ## Run locally
 
-Install Rust through `rustup`, then start the service. The repository pins Rust 1.99.0 in `rust-toolchain.toml`.
+Install Rust through `rustup`, then start the service. The repository pins the Rust version in `rust-toolchain.toml`.
 
 ```bash
 cargo run
@@ -21,14 +21,15 @@ curl http://localhost:3000/mojang/uuid/Pistonmaster
 
 ## Configuration
 
-The service reads `.env` during local development and uses normal environment variables in production.
+The service reads `.env` during local development and uses normal environment variables in production. A variable set to an empty value counts as unset. The service stops at startup and names the variable when a value is invalid.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `SERVER_PORT` | No | `PORT` or `3000` | Compatibility override for the TCP port |
 | `PORT` | No | `3000` | TCP port used by the HTTP server and hosting platforms |
 | `PROXY_LIST_FILE` | No | Direct connection | File containing outbound HTTP proxies |
-| `DISCORD_WEBHOOK` | No | Disabled | Discord webhook that receives five-minute status reports |
+| `DISCORD_WEBHOOK` | No | Disabled | `https://` Discord webhook that receives five-minute status reports |
+| `TRUSTED_PROXIES` | No | Loopback and private ranges | Comma-separated IP addresses or CIDR ranges whose `CF-Connecting-IP` header is trusted, or `none` |
 | `RUST_LOG` | No | `info` | Logging filter used by `tracing` |
 
 Each non-empty line in the proxy file must use one of these formats:
@@ -38,7 +39,13 @@ host:port
 host:port:username:password
 ```
 
-Passwords may contain additional colons. Invalid entries are logged and ignored. If the configured file does not exist, the service starts with direct connections.
+Passwords may contain additional colons. Invalid entries are logged and ignored. If the configured file cannot be read, the service does not start. If the file has no valid entries, the service logs a warning and uses direct connections.
+
+### Client addresses and rate limits
+
+Each client may send 1,000 requests per minute to the Mojang and documentation endpoints. `/health` has no limit. The limiter identifies a client by the TCP peer address. When the peer is in `TRUSTED_PROXIES`, it uses the `CF-Connecting-IP` header instead. IPv6 clients share one limit per /64 prefix.
+
+The default trusts loopback and private peers, which fits a reverse proxy such as Traefik on the same host or network. That proxy passes `CF-Connecting-IP` through unchanged, so make sure the origin only accepts traffic from Cloudflare. Otherwise, a client that reaches the origin directly can set the header to any address.
 
 ## API
 
@@ -58,6 +65,8 @@ A successful response returns a dashed UUID:
 ```
 
 Unknown usernames return `200 OK` with `exists` set to `false` and `uuid` set to `null`.
+
+Usernames must have 1 to 16 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`.
 
 ### Look up a skin property
 
@@ -81,11 +90,26 @@ Missing profiles or texture properties return `200 OK` with `exists` set to `fal
 
 ### Other endpoints
 
-- `GET /health` returns the liveness status.
+- `GET /health` returns `200` with `{"status":"UP"}`, or `503` with `{"status":"DOWN"}` when username lookups have stopped.
 - `GET /openapi` returns the generated OpenAPI document.
 - `GET /swagger` opens Swagger UI.
 
-Successful Mojang lookup responses include `Cache-Control: public, max-age=900`. Invalid input returns `400`, upstream timeouts return `503`, and other upstream failures return `500`.
+Lookup responses for existing profiles include `Cache-Control: public, max-age=900`. Responses with `exists` set to `false` include `Cache-Control: public, max-age=60`.
+
+### Errors
+
+Every error response has a JSON body such as `{"error":"INVALID_NAME"}`.
+
+| Status | `error` | Meaning |
+| --- | --- | --- |
+| `400` | `INVALID_NAME`, `INVALID_UUID` | The username or UUID is not valid |
+| `404` | `NOT_FOUND` | The path does not exist |
+| `405` | `METHOD_NOT_ALLOWED` | The path does not support the method |
+| `429` | `RATE_LIMITED` | The client exceeded its rate limit. Retry after `Retry-After` seconds |
+| `500` | `INTERNAL_ERROR` | The request to Mojang failed or Mojang sent an invalid response |
+| `502` | `UPSTREAM_ERROR` | Mojang returned an unexpected HTTP status |
+| `503` | `INTERNAL_TIMEOUT` | Mojang did not respond in time |
+| `503` | `SERVICE_UNAVAILABLE` | Mojang rate-limited the service, or the service is at capacity. Retry after `Retry-After` seconds |
 
 ## Deploy with Railpack
 
@@ -102,7 +126,8 @@ Pushes to `main` build a release image with Railpack and publish it to
 - `main`: the latest published build from `main`
 - `sha-<12-character-commit-sha>`: the build for a specific commit
 
-The workflow uses the `ubuntu-24.04` runner and authenticates
+The workflow runs only after the build, test, and lint jobs pass for the same commit.
+It builds on the `ubuntu-26.04` and `ubuntu-26.04-arm` runners and authenticates
 with `GITHUB_TOKEN`, with `packages: write` permission.
 
 Run the published image:
@@ -129,13 +154,19 @@ cargo build --release --locked
 
 Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and flushes batches when ten distinct requests are queued or after three seconds. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
 
-Moka stores up to 10,000 username entries and uses a 32 MiB weighted budget for skin entries. Positive results expire after six hours. Negative results expire after 15 minutes so newly created profiles and skins become visible sooner.
+A username lookup fails with `503` when the batch queue is full or when its batch does not finish within 25 seconds.
 
-Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 15-second timeout, reject response bodies larger than 1 MiB, and select a random configured proxy for each request. The rate limiter uses the trusted `CF-Connecting-IP` address and shards client state to reduce lock contention.
+Moka stores up to 100,000 username entries and uses a 32 MiB weighted budget for skin entries. Usernames expire after six hours and skins after one hour, because players can change skins at any time. Negative results expire after 15 minutes so newly created profiles and skins become visible sooner. A request counts as a cache hit only when the value was already cached.
+
+Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 15-second timeout and reject response bodies larger than 1 MiB. Each configured proxy has its own HTTP client, and each request picks a random proxy. When Mojang answers `429`, the service stops using that proxy for that Mojang API until the `Retry-After` delay passes (30 seconds by default), and retries the request once through another proxy. At most 64 skin lookups run at the same time.
+
+The rate limiter uses the generic cell rate algorithm, so a client cannot send two bursts across a window boundary. It shards client state to reduce lock contention and caps the number of tracked clients.
+
+The HTTP server closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 30 seconds.
 
 Metrics remain cumulative in memory. A Discord report advances its reporting window only after Discord accepts it, so transport errors and non-successful HTTP responses do not discard counters.
 
-On `SIGINT` or `SIGTERM`, the server stops accepting traffic and gives HTTP requests and queued batches up to 30 seconds each to drain. Work that exceeds either deadline is cancelled so shutdown cannot hang indefinitely.
+On `SIGINT` or `SIGTERM`, the server stops accepting traffic and gives HTTP requests and queued batches up to 30 seconds each to drain. Work that exceeds either deadline is cancelled so shutdown cannot hang indefinitely. A second signal stops the service at once with a non-zero exit code.
 
 ## Contributing and support
 
