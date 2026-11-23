@@ -278,11 +278,6 @@ async fn run_batch_processor(
                     .await;
                 }
             }
-            completed = tasks.join_next(), if !tasks.is_empty() => {
-                if let Some(Err(error)) = completed {
-                    error!(%error, "batch task stopped unexpectedly");
-                }
-            }
         }
     }
 
@@ -311,6 +306,13 @@ async fn spawn_batch(
         .acquire_owned()
         .await
         .expect("the batch semaphore is never closed");
+    // Reap finished batches here rather than in the main loop's `select!`, where the biased
+    // receiver branch starves a `join_next` branch while the queue stays busy.
+    while let Some(result) = tasks.try_join_next() {
+        if let Err(error) = result {
+            error!(%error, "batch task stopped unexpectedly");
+        }
+    }
     tasks.spawn(async move {
         let _permit = permit;
         process_batch(batch, service.as_ref(), &metrics).await;
@@ -384,7 +386,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use tokio::sync::Semaphore;
+    use tokio::sync::{Semaphore, oneshot};
     use uuid::Uuid;
 
     use crate::{
@@ -394,7 +396,7 @@ mod tests {
         types::SkinProperty,
     };
 
-    use super::{BatchConfig, BatchConfigError, BatchProcessor};
+    use super::{BatchConfig, BatchConfigError, BatchProcessor, PendingLookup};
 
     #[derive(Default)]
     struct FakeMojangService {
@@ -480,6 +482,16 @@ mod tests {
     fn test_config(size: usize) -> BatchConfig {
         BatchConfig::new(size, Duration::from_millis(10), 32, 2)
             .expect("test batch configuration should be valid")
+    }
+
+    async fn wait_until(condition: impl Fn() -> bool, message: &str) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !condition() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect(message);
     }
 
     #[test]
@@ -696,23 +708,44 @@ mod tests {
                 .expect("test batch configuration should be valid"),
         );
         let lookup = processor.lookup();
-        let names = ["First", "Second", "Third", "Fourth", "Fifth"];
-        let requests = names.map(|name| {
-            let lookup = lookup.clone();
-            tokio::spawn(async move { lookup.lookup(name.to_owned()).await })
-        });
+        let queue = |name: &str| {
+            let (response, receiver) = oneshot::channel();
+            let sent = lookup.sender.try_send(PendingLookup {
+                name: name.to_owned(),
+                response,
+            });
+            assert!(sent.is_ok(), "the queue should accept {name}");
+            receiver
+        };
+        // The first batch holds the only in-flight permit.
+        let running = queue("first");
+        wait_until(
+            || service.active.load(Ordering::SeqCst) == 1,
+            "the first batch should start",
+        )
+        .await;
+        // The processor takes the second lookup and blocks while it waits for a permit.
+        let waiting = queue("second");
+        wait_until(
+            || lookup.sender.capacity() == 1,
+            "the processor should take the second lookup",
+        )
+        .await;
+        // The third lookup fills the queue, so the next one is rejected.
+        let queued = queue("third");
+        assert_eq!(
+            lookup.lookup("Fourth".to_owned()).await,
+            Err(UpstreamError::Overloaded)
+        );
 
-        // At most one batch runs, one waits for a permit, and one waits in the queue.
-        service.release.add_permits(names.len());
-        let mut overloaded = 0;
-        for request in requests {
-            match request.await.expect("lookup task should finish") {
-                Ok(_) => {}
-                Err(UpstreamError::Overloaded) => overloaded += 1,
-                Err(error) => panic!("unexpected lookup error: {error}"),
-            }
+        service.release.add_permits(3);
+        for receiver in [running, waiting, queued] {
+            assert_eq!(
+                receiver.await.expect("the batch should answer the lookup"),
+                Ok(None)
+            );
         }
-        assert!(overloaded >= 2, "only {overloaded} lookups were rejected");
+        assert_eq!(service.peak.load(Ordering::SeqCst), 1);
 
         drop(lookup);
         processor.shutdown().await;
