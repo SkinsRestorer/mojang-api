@@ -17,11 +17,8 @@ use tower_http::{
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
-use utoipa::{
-    Modify, OpenApi,
-    openapi::{OpenApi as OpenApiDocument, Server},
-};
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::{Config as SwaggerConfig, SwaggerUi};
 
 use crate::{
     batch::BatchLookup,
@@ -61,32 +58,13 @@ pub struct AppState {
 #[openapi(
     info(
         title = "Mojang API Proxy",
-        version = "2.0.0",
-        description = "A proxy service for Mojang API endpoints.\n\nEach client may send 1,000 requests per minute to the `/mojang` endpoints. Responses include `RateLimit-Limit`, `RateLimit-Policy`, `RateLimit-Remaining`, and `RateLimit-Reset` headers. A client over the limit receives `429` with a `Retry-After` header."
+        description = "Cached Minecraft username and skin lookups. Each client may send 1,000 requests per minute to `/mojang`, reported in `RateLimit-*` headers."
     ),
     paths(lookup_uuid, lookup_skin, health),
-    components(schemas(
-        ErrorResponse,
-        HealthResponse,
-        SkinLookupResponse,
-        SkinProperty,
-        UuidLookupResponse
-    )),
-    tags(
-        (name = "mojang", description = "Mojang API endpoints"),
-        (name = "health", description = "Health check endpoint")
-    ),
-    modifiers(&ApiServers)
+    // Listed so that the Mojang endpoints appear above the health check.
+    tags((name = "mojang"), (name = "health"))
 )]
 struct ApiDoc;
-
-struct ApiServers;
-
-impl Modify for ApiServers {
-    fn modify(&self, openapi: &mut OpenApiDocument) {
-        openapi.servers = Some(vec![Server::new("https://eclipse.skinsrestorer.net")]);
-    }
-}
 
 /// Builds the application router.
 ///
@@ -97,14 +75,8 @@ impl Modify for ApiServers {
 /// Returns an error when the built-in rate limiter configuration is invalid.
 pub fn build_router(
     state: AppState,
-    local_port: u16,
     trusted_proxies: Vec<IpNet>,
 ) -> Result<Router, RateLimitConfigError> {
-    let mut openapi = ApiDoc::openapi();
-    openapi
-        .servers
-        .get_or_insert_default()
-        .push(Server::new(format!("http://localhost:{local_port}")));
     let rate_limiter = Arc::new(RateLimiter::new(
         RATE_LIMIT,
         RATE_LIMIT_WINDOW,
@@ -115,7 +87,12 @@ pub fn build_router(
         .route("/", get(|| async { Redirect::temporary("/swagger") }))
         .route("/mojang/uuid/{name}", get(lookup_uuid))
         .route("/mojang/skin/{uuid}", get(lookup_skin))
-        .merge(SwaggerUi::new("/swagger").url("/openapi", openapi))
+        .merge(
+            SwaggerUi::new("/swagger")
+                .url("/openapi", ApiDoc::openapi())
+                // Every response already links its schema, so hide the duplicate list.
+                .config(SwaggerConfig::default().default_models_expand_depth(-1)),
+        )
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
@@ -150,13 +127,19 @@ pub fn build_router(
     path = "/mojang/uuid/{name}",
     params(("name" = String, Path, description = "Minecraft username to convert to UUID")),
     responses(
-        (status = 200, description = "Successful response", body = UuidLookupResponse),
-        (status = 400, description = "Invalid username format", body = ErrorResponse),
+        (status = 200, description = "`exists` is `false` when no player has this name", body = UuidLookupResponse),
+        (status = 400, description = "The name is not 1 to 16 characters of `A-Z`, `a-z`, `0-9`, `_`, or `-`", body = ErrorResponse,
+            example = json!({"error": "INVALID_NAME"})),
         (status = 429, description = "The client exceeded the rate limit", body = ErrorResponse,
-            headers(("Retry-After" = u64, description = "Seconds to wait before retrying"))),
-        (status = 500, description = "Internal server error", body = ErrorResponse),
-        (status = 502, description = "Mojang returned an unexpected status", body = ErrorResponse),
-        (status = 503, description = "Mojang timed out (`INTERNAL_TIMEOUT`), or Mojang rate-limited the service or the service is at capacity (`SERVICE_UNAVAILABLE`, with `Retry-After`)", body = ErrorResponse)
+            headers(("Retry-After" = u64, description = "Seconds to wait before retrying")),
+            example = json!({"error": "RATE_LIMITED"})),
+        (status = 500, description = "The request to Mojang failed", body = ErrorResponse,
+            example = json!({"error": "INTERNAL_ERROR"})),
+        (status = 502, description = "Mojang returned an unexpected status", body = ErrorResponse,
+            example = json!({"error": "UPSTREAM_ERROR"})),
+        (status = 503, description = "Mojang timed out (`INTERNAL_TIMEOUT`), or is rate-limiting this service (`SERVICE_UNAVAILABLE`)", body = ErrorResponse,
+            headers(("Retry-After" = u64, description = "Seconds to wait before retrying, for `SERVICE_UNAVAILABLE`")),
+            example = json!({"error": "SERVICE_UNAVAILABLE"}))
     ),
     tag = "mojang"
 )]
@@ -187,13 +170,19 @@ async fn lookup_uuid(
     path = "/mojang/skin/{uuid}",
     params(("uuid" = String, Path, description = "Minecraft UUID to get skin data for")),
     responses(
-        (status = 200, description = "Successful response", body = SkinLookupResponse),
-        (status = 400, description = "Invalid UUID format", body = ErrorResponse),
+        (status = 200, description = "`exists` is `false` when the profile or its skin does not exist", body = SkinLookupResponse),
+        (status = 400, description = "The UUID is not 32 hex digits, with or without dashes", body = ErrorResponse,
+            example = json!({"error": "INVALID_UUID"})),
         (status = 429, description = "The client exceeded the rate limit", body = ErrorResponse,
-            headers(("Retry-After" = u64, description = "Seconds to wait before retrying"))),
-        (status = 500, description = "Internal server error", body = ErrorResponse),
-        (status = 502, description = "Mojang returned an unexpected status", body = ErrorResponse),
-        (status = 503, description = "Mojang timed out (`INTERNAL_TIMEOUT`), or Mojang rate-limited the service or the service is at capacity (`SERVICE_UNAVAILABLE`, with `Retry-After`)", body = ErrorResponse)
+            headers(("Retry-After" = u64, description = "Seconds to wait before retrying")),
+            example = json!({"error": "RATE_LIMITED"})),
+        (status = 500, description = "The request to Mojang failed", body = ErrorResponse,
+            example = json!({"error": "INTERNAL_ERROR"})),
+        (status = 502, description = "Mojang returned an unexpected status", body = ErrorResponse,
+            example = json!({"error": "UPSTREAM_ERROR"})),
+        (status = 503, description = "Mojang timed out (`INTERNAL_TIMEOUT`), or is rate-limiting this service (`SERVICE_UNAVAILABLE`)", body = ErrorResponse,
+            headers(("Retry-After" = u64, description = "Seconds to wait before retrying, for `SERVICE_UNAVAILABLE`")),
+            example = json!({"error": "SERVICE_UNAVAILABLE"}))
     ),
     tag = "mojang"
 )]
@@ -238,8 +227,10 @@ async fn lookup_skin(
     get,
     path = "/health",
     responses(
-        (status = 200, description = "Service is running", body = HealthResponse),
-        (status = 503, description = "Username lookups are unavailable", body = HealthResponse)
+        (status = 200, description = "Service is running", body = HealthResponse,
+            example = json!({"status": "UP"})),
+        (status = 503, description = "Username lookups have stopped", body = HealthResponse,
+            example = json!({"status": "DOWN"}))
     ),
     tag = "health"
 )]
@@ -335,8 +326,7 @@ mod tests {
             }),
         });
         let metrics = Arc::new(Metrics::default());
-        let cache = CacheManager::new(32, Duration::from_mins(1))
-            .expect("test cache configuration should be valid");
+        let cache = CacheManager::default();
         let batch = BatchProcessor::start(
             Arc::clone(&mojang),
             cache.clone(),
@@ -351,7 +341,6 @@ mod tests {
                 mojang,
                 metrics,
             },
-            3000,
             Vec::new(),
         )
         .expect("test router configuration should be valid");

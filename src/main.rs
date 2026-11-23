@@ -81,7 +81,6 @@ async fn run(
             mojang,
             metrics,
         },
-        config.server_port,
         config.trusted_proxies.clone(),
     )?;
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.server_port)).await?;

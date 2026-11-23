@@ -515,8 +515,7 @@ mod tests {
             profiles: HashMap::from([("pistonmaster".to_owned(), uuid)]),
             ..FakeMojangService::default()
         });
-        let cache = CacheManager::new(32, Duration::from_mins(1))
-            .expect("test cache configuration should be valid");
+        let cache = CacheManager::default();
         let processor = BatchProcessor::start(
             Arc::<FakeMojangService>::clone(&service),
             cache,
@@ -557,8 +556,7 @@ mod tests {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
             Arc::<FakeMojangService>::clone(&service),
-            CacheManager::new(32, Duration::from_mins(1))
-                .expect("test cache configuration should be valid"),
+            CacheManager::default(),
             Arc::new(Metrics::default()),
             test_config(10),
         );
@@ -591,8 +589,7 @@ mod tests {
         let service = Arc::new(FakeMojangService::default());
         let processor = BatchProcessor::start(
             Arc::<FakeMojangService>::clone(&service),
-            CacheManager::new(32, Duration::from_mins(1))
-                .expect("test cache configuration should be valid"),
+            CacheManager::default(),
             Arc::new(Metrics::default()),
             BatchConfig::new(2, Duration::from_secs(30), 32, 2)
                 .expect("test batch configuration should be valid"),
@@ -628,8 +625,7 @@ mod tests {
         });
         let processor = BatchProcessor::start(
             service,
-            CacheManager::new(32, Duration::from_mins(1))
-                .expect("test cache configuration should be valid"),
+            CacheManager::default(),
             Arc::new(Metrics::default()),
             test_config(10),
         );
@@ -649,8 +645,7 @@ mod tests {
         let service = Arc::new(BlockingMojangService::default());
         let processor = BatchProcessor::start(
             Arc::<BlockingMojangService>::clone(&service),
-            CacheManager::new(32, Duration::from_mins(1))
-                .expect("test cache configuration should be valid"),
+            CacheManager::default(),
             Arc::new(Metrics::default()),
             BatchConfig::new(1, Duration::from_secs(30), 3, 1)
                 .expect("test batch configuration should be valid"),
@@ -689,8 +684,7 @@ mod tests {
         let service = Arc::new(BlockingMojangService::default());
         let processor = BatchProcessor::start(
             Arc::<BlockingMojangService>::clone(&service),
-            CacheManager::new(32, Duration::from_mins(1))
-                .expect("test cache configuration should be valid"),
+            CacheManager::default(),
             Arc::new(Metrics::default()),
             BatchConfig::new(1, Duration::from_secs(30), 1, 1)
                 .expect("test batch configuration should be valid"),
@@ -722,8 +716,7 @@ mod tests {
     async fn shutdown_closes_external_lookup_handles() {
         let processor = BatchProcessor::start(
             Arc::new(FakeMojangService::default()),
-            CacheManager::new(32, Duration::from_mins(1))
-                .expect("test cache configuration should be valid"),
+            CacheManager::default(),
             Arc::new(Metrics::default()),
             test_config(10),
         );

@@ -1,7 +1,6 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use moka::{Expiry, future::Cache};
-use thiserror::Error;
 use uuid::Uuid;
 
 use crate::types::SkinProperty;
@@ -13,9 +12,7 @@ const POSITIVE_NAME_TTL: Duration = Duration::from_hours(6);
 /// Players can change skins at any time, so skins expire sooner than names.
 const POSITIVE_SKIN_TTL: Duration = Duration::from_hours(1);
 const NEGATIVE_CACHE_TTL: Duration = Duration::from_mins(15);
-const ESTIMATED_SKIN_ENTRY_BYTES: u64 = 2 * 1024;
 const SKIN_ENTRY_OVERHEAD_BYTES: usize = 128;
-const MAX_CACHE_TTL: Duration = Duration::from_hours(8_760_000);
 
 /// Caches name-to-UUID and UUID-to-skin lookups.
 ///
@@ -45,46 +42,6 @@ impl Default for CacheManager {
 }
 
 impl CacheManager {
-    /// Creates caches sized for the requested number of typical entries.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the time to live is zero or exceeds Moka's supported maximum.
-    pub fn new(capacity: u64, ttl: Duration) -> Result<Self, CacheConfigError> {
-        let skin_capacity_bytes = capacity.saturating_mul(ESTIMATED_SKIN_ENTRY_BYTES);
-        Self::with_limits(
-            capacity,
-            skin_capacity_bytes,
-            ttl,
-            ttl.min(NEGATIVE_CACHE_TTL),
-        )
-    }
-
-    /// Creates caches with independent name-entry and skin-byte limits that share TTLs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when either time to live is zero or exceeds Moka's supported maximum.
-    pub fn with_limits(
-        name_capacity: u64,
-        skin_capacity_bytes: u64,
-        positive_ttl: Duration,
-        negative_ttl: Duration,
-    ) -> Result<Self, CacheConfigError> {
-        validate_ttl(positive_ttl)?;
-        validate_ttl(negative_ttl)?;
-        let expiry = OptionalValueExpiry {
-            positive_ttl,
-            negative_ttl,
-        };
-        Ok(Self::build(
-            name_capacity,
-            skin_capacity_bytes,
-            expiry,
-            expiry,
-        ))
-    }
-
     fn build(
         name_capacity: u64,
         skin_capacity_bytes: u64,
@@ -228,24 +185,6 @@ fn skin_entry_weight(_uuid: &Uuid, property: Option<&Arc<SkinProperty>>) -> u32 
     u32::try_from(SKIN_ENTRY_OVERHEAD_BYTES.saturating_add(payload_bytes)).unwrap_or(u32::MAX)
 }
 
-fn validate_ttl(ttl: Duration) -> Result<(), CacheConfigError> {
-    if ttl.is_zero() {
-        return Err(CacheConfigError::ZeroTimeToLive);
-    }
-    if ttl > MAX_CACHE_TTL {
-        return Err(CacheConfigError::TimeToLiveTooLong);
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CacheConfigError {
-    #[error("cache time to live must be greater than zero")]
-    ZeroTimeToLive,
-    #[error("cache time to live must not exceed 1000 years")]
-    TimeToLiveTooLong,
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -260,19 +199,7 @@ mod tests {
 
     use crate::types::SkinProperty;
 
-    use super::{CacheConfigError, CacheManager, MAX_CACHE_TTL, OptionalValueExpiry};
-
-    #[test]
-    fn rejects_unsupported_cache_time_to_live() {
-        assert!(matches!(
-            CacheManager::new(1, Duration::ZERO),
-            Err(CacheConfigError::ZeroTimeToLive)
-        ));
-        assert!(matches!(
-            CacheManager::new(1, MAX_CACHE_TTL.saturating_add(Duration::from_secs(1))),
-            Err(CacheConfigError::TimeToLiveTooLong)
-        ));
-    }
+    use super::{CacheManager, OptionalValueExpiry};
 
     #[test]
     fn expires_negative_results_sooner() {
@@ -287,8 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn coalesces_concurrent_loads_for_the_same_key() {
-        let cache = CacheManager::new(32, Duration::from_mins(1))
-            .expect("test cache configuration should be valid");
+        let cache = CacheManager::default();
         let loads = Arc::new(AtomicUsize::new(0));
         let load = || {
             let loads = Arc::clone(&loads);
@@ -331,8 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn shares_cached_skin_strings() {
-        let cache = CacheManager::new(32, Duration::from_mins(1))
-            .expect("test cache configuration should be valid");
+        let cache = CacheManager::default();
         let uuid = Uuid::nil();
         let property = Arc::new(SkinProperty {
             value: "texture".to_owned(),
