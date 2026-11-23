@@ -58,6 +58,7 @@ uuid = { version = "1.24.0", features = ["serde"] }
 [dev-dependencies]
 # The tests run real servers with `axum::serve`.
 axum = { version = "0.8.9", default-features = false, features = ["http1"] }
+tokio = { version = "1.53.1", features = ["test-util"] }
 
 [profile.release]
 codegen-units = 1
