@@ -107,10 +107,12 @@ async fn run(
 /// Counts shutdown signals, so a second signal can force an immediate exit.
 fn listen_for_signals() -> watch::Receiver<u32> {
     let (sender, receiver) = watch::channel(0_u32);
+    // Install the handlers once, before returning. Installing them inside the task
+    // would leave the default handlers active until the task is first polled, so an
+    // early signal would kill the process, and signals that arrive while no handler
+    // is subscribed would be lost.
+    let mut signals = ShutdownSignals::install();
     tokio::spawn(async move {
-        // Install the handlers once. Signals that arrive while no handler is
-        // subscribed would otherwise be lost.
-        let mut signals = ShutdownSignals::install();
         loop {
             signals.recv().await;
             sender.send_modify(|count| *count = count.saturating_add(1));
@@ -197,5 +199,40 @@ impl ShutdownSignals {
             error!(%error, "could not install Ctrl+C signal handler");
             std::future::pending::<()>().await;
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use std::{process::Command, time::Duration};
+
+    use tokio::time::timeout;
+
+    use super::{listen_for_signals, signal_count};
+
+    // Blocking on purpose: an await point would let the listener task run first.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test must not yield to the runtime"
+    )]
+    fn send_signal(name: &str) {
+        let status = Command::new("kill")
+            .args([format!("-{name}"), std::process::id().to_string()])
+            .status()
+            .expect("kill should run");
+        assert!(status.success(), "kill -{name} should succeed");
+    }
+
+    #[tokio::test]
+    async fn counts_signals_sent_before_the_listener_task_runs() {
+        let signals = listen_for_signals();
+        // The current-thread runtime has not polled the listener task yet, so these
+        // signals would terminate the test process without installed handlers.
+        send_signal("TERM");
+        send_signal("INT");
+        timeout(Duration::from_secs(5), signal_count(signals, 2))
+            .await
+            .expect("both signals should be counted");
     }
 }
