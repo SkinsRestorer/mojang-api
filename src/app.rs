@@ -334,12 +334,23 @@ mod tests {
                 .collect())
         }
 
-        async fn lookup_skin(&self, _uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
-            Ok(self.skin.clone())
+        async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
+            if uuid == self.uuid {
+                Ok(self.skin.clone())
+            } else if uuid.is_nil() {
+                Err(UpstreamError::HttpStatus(500))
+            } else {
+                Ok(None)
+            }
         }
     }
 
     fn test_app() -> (axum::Router, BatchProcessor, Uuid) {
+        let (app, batch, uuid, _) = test_app_with_metrics();
+        (app, batch, uuid)
+    }
+
+    fn test_app_with_metrics() -> (axum::Router, BatchProcessor, Uuid, Arc<Metrics>) {
         let uuid = Uuid::parse_str("b1ae0778-4817-436c-96a3-a72c67cda060")
             .expect("test UUID should parse");
         let mojang: Arc<dyn MojangService> = Arc::new(FakeMojangService {
@@ -363,11 +374,11 @@ mod tests {
                 batch_lookup: batch.lookup(),
                 cache,
                 mojang,
-                metrics,
+                metrics: Arc::clone(&metrics),
             },
             Vec::new(),
         );
-        (app, batch, uuid)
+        (app, batch, uuid, metrics)
     }
 
     fn get(path: &str) -> Request<Body> {
@@ -553,6 +564,60 @@ mod tests {
         assert_eq!(
             response.headers().get(CACHE_CONTROL),
             Some(&"public, max-age=60".parse().expect("header should parse"))
+        );
+
+        batch.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn counts_skin_cache_hits_and_misses_including_failures() {
+        let (app, batch, uuid, metrics) = test_app_with_metrics();
+        let skin = |uuid: Uuid| get(&format!("/mojang/skin/{uuid}"));
+
+        for _ in 0..2 {
+            let found = app
+                .clone()
+                .oneshot(skin(uuid))
+                .await
+                .expect("request should succeed");
+            assert_eq!(found.status(), StatusCode::OK);
+            assert_eq!(
+                found.headers().get(CACHE_CONTROL),
+                Some(&"public, max-age=900".parse().expect("header should parse"))
+            );
+        }
+
+        let missing = app
+            .clone()
+            .oneshot(skin(Uuid::from_u128(1)))
+            .await
+            .expect("request should succeed");
+        assert_eq!(missing.status(), StatusCode::OK);
+        assert_eq!(
+            missing.headers().get(CACHE_CONTROL),
+            Some(&"public, max-age=60".parse().expect("header should parse"))
+        );
+        assert_eq!(
+            response_json::<SkinLookupResponse>(missing).await,
+            SkinLookupResponse {
+                exists: false,
+                skin_property: None,
+            }
+        );
+
+        let failed = app
+            .oneshot(skin(Uuid::nil()))
+            .await
+            .expect("request should succeed");
+        assert_eq!(failed.status(), StatusCode::BAD_GATEWAY);
+        assert!(!failed.headers().contains_key(CACHE_CONTROL));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.skin_requests, 4);
+        assert_eq!(
+            (snapshot.skin_cache_hits, snapshot.skin_cache_misses),
+            (1, 3),
+            "a failed load was not served from the cache, so it is a miss"
         );
 
         batch.shutdown().await;
