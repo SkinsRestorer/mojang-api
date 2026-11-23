@@ -3,7 +3,7 @@
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Request, State, rejection::PathRejection},
     http::{
         HeaderValue, Method, StatusCode,
@@ -31,7 +31,7 @@ use crate::{
     log_throttle::{LOG_INTERVAL, LogThrottle},
     metrics::Metrics,
     mojang::{MojangService, UPSTREAM_BUDGET},
-    rate_limit::{RateLimiter, enforce_rate_limit},
+    rate_limit::{ClientKey, RateLimiter, enforce_rate_limit},
     types::{
         ErrorResponse, HealthResponse, HealthStatus, SkinLookupResponse, SkinProperty,
         UuidLookupResponse,
@@ -188,6 +188,7 @@ fn log_failure(classification: &ServerErrorsFailureClass, latency: Duration) {
 )]
 async fn lookup_uuid(
     State(state): State<Arc<AppState>>,
+    Extension(client): Extension<ClientKey>,
     name: Result<Path<String>, PathRejection>,
 ) -> Result<Response, AppError> {
     state.metrics.increment_uuid_requests();
@@ -196,7 +197,7 @@ async fn lookup_uuid(
         .filter(|Path(name)| is_valid_minecraft_username(name))
         .ok_or(AppError::InvalidName)?;
 
-    let uuid = state.batch_lookup.lookup(name).await?;
+    let uuid = state.batch_lookup.lookup(name, client).await?;
     Ok(cacheable_json(
         uuid.is_some(),
         UuidLookupResponse {

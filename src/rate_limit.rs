@@ -33,6 +33,10 @@ const MAX_CLIENTS_PER_SHARD: usize = 4_096;
 /// Limits how often a full shard is scanned for expired clients.
 const MIN_FULL_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The key that identifies a client, which the rate limit middleware adds to each request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClientKey(pub IpAddr);
+
 /// A generic cell rate algorithm (GCRA) limiter.
 ///
 /// Each client may send `limit` requests in a burst, then one request per `window / limit`.
@@ -202,7 +206,7 @@ impl RateLimiter {
 
 pub async fn enforce_rate_limit(
     State(rate_limiter): State<Arc<RateLimiter>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     let peer = request
@@ -213,6 +217,7 @@ pub async fn enforce_rate_limit(
     let decision = rate_limiter.check(key, Instant::now());
 
     let mut response = if decision.allowed {
+        request.extensions_mut().insert(ClientKey(key));
         next.run(request).await
     } else {
         rate_limiter.metrics.increment_rate_limited_requests();

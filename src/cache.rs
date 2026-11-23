@@ -82,6 +82,11 @@ impl CacheManager {
         get_or_try_insert(&self.names, normalized_name, init).await
     }
 
+    /// Stores a username lookup result that no request may be waiting for.
+    pub async fn insert_uuid(&self, normalized_name: String, uuid: Option<Uuid>) {
+        self.names.insert(normalized_name, uuid).await;
+    }
+
     /// Returns the cached skin or coalesces concurrent initialization for the same UUID.
     ///
     /// Hits follow the same rules as [`Self::get_or_try_insert_uuid`].

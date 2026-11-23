@@ -1,4 +1,9 @@
-use std::{collections::HashMap, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use thiserror::Error;
 use tokio::{
@@ -18,6 +23,7 @@ use crate::{
     log_throttle::{LOG_INTERVAL, LogThrottle},
     metrics::Metrics,
     mojang::{MojangService, UPSTREAM_BUDGET, UpstreamError},
+    rate_limit::ClientKey,
 };
 
 const BATCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -35,6 +41,9 @@ const _: () = assert!(
     BATCH_INTERVAL.as_millis() + UPSTREAM_BUDGET.as_millis() < LOOKUP_TIMEOUT.as_millis(),
     "a lookup must outlast its batch interval and the Mojang call"
 );
+/// Bounds how many queued or in-flight lookups one client can hold, so clients that each stay
+/// under the rate limit cannot fill the shared queue together.
+const MAX_LOOKUPS_PER_CLIENT: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BatchConfig {
@@ -107,6 +116,63 @@ pub enum BatchConfigError {
 struct PendingLookup {
     name: String,
     response: oneshot::Sender<Result<Option<Uuid>, UpstreamError>>,
+    /// Released once the batch answers the lookup or drops it unprocessed.
+    _slot: ClientSlot,
+}
+
+/// Counts the lookups each client holds in the queue or in a running batch.
+#[derive(Debug, Default)]
+struct ClientLookups(Mutex<HashMap<ClientKey, usize>>);
+
+impl ClientLookups {
+    fn reserve(self: &Arc<Self>, client: ClientKey) -> Option<ClientSlot> {
+        let mut counts = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let count = counts.entry(client).or_default();
+        if *count >= MAX_LOOKUPS_PER_CLIENT {
+            return None;
+        }
+        *count += 1;
+        drop(counts);
+        Some(ClientSlot {
+            lookups: Arc::clone(self),
+            client,
+        })
+    }
+
+    #[cfg(test)]
+    fn held_by(&self, client: ClientKey) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&client)
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+struct ClientSlot {
+    lookups: Arc<ClientLookups>,
+    client: ClientKey,
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        let mut counts = self
+            .lookups
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(count) = counts.get_mut(&self.client) {
+            *count -= 1;
+            // Removing idle clients keeps the map as small as the queue.
+            if *count == 0 {
+                counts.remove(&self.client);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +180,7 @@ pub struct BatchLookup {
     sender: mpsc::Sender<PendingLookup>,
     cache: CacheManager,
     metrics: Arc<Metrics>,
+    client_lookups: Arc<ClientLookups>,
 }
 
 impl BatchLookup {
@@ -121,21 +188,32 @@ impl BatchLookup {
     ///
     /// # Errors
     ///
-    /// Returns an upstream error when the queue is full or closed, when the lookup does not
-    /// finish in time, or when Mojang cannot resolve the batch.
-    pub async fn lookup(&self, mut name: String) -> Result<Option<Uuid>, UpstreamError> {
+    /// Returns an upstream error when the queue is full or closed, when `client` already holds
+    /// its share of the queue, when the lookup does not finish in time, or when Mojang cannot
+    /// resolve the batch.
+    pub async fn lookup(
+        &self,
+        mut name: String,
+        client: ClientKey,
+    ) -> Result<Option<Uuid>, UpstreamError> {
         name.make_ascii_lowercase();
         let request_name = name.clone();
         let sender = self.sender.clone();
         let metrics = Arc::clone(&self.metrics);
+        let client_lookups = Arc::clone(&self.client_lookups);
         let result = self
             .cache
             .get_or_try_insert_uuid(name, async move {
+                let slot = client_lookups.reserve(client).ok_or_else(|| {
+                    warn!("rejecting Mojang lookup because the client holds too many lookups");
+                    UpstreamError::Overloaded
+                })?;
                 let (response, receiver) = oneshot::channel();
                 sender
                     .try_send(PendingLookup {
                         name: request_name,
                         response,
+                        _slot: slot,
                     })
                     .map_err(|error| match error {
                         TrySendError::Full(_) => {
@@ -201,14 +279,16 @@ impl BatchProcessor {
         let (sender, receiver) = mpsc::channel(config.queue_capacity.get());
         let lookup = BatchLookup {
             sender,
-            cache,
+            cache: cache.clone(),
             metrics: Arc::clone(&metrics),
+            client_lookups: Arc::default(),
         };
         let (shutdown, shutdown_receiver) = oneshot::channel();
         let task = tokio::spawn(run_batch_processor(
             receiver,
             shutdown_receiver,
             service,
+            cache,
             metrics,
             config,
         ));
@@ -249,6 +329,7 @@ async fn run_batch_processor(
     mut receiver: mpsc::Receiver<PendingLookup>,
     mut shutdown: oneshot::Receiver<()>,
     service: Arc<dyn MojangService>,
+    cache: CacheManager,
     metrics: Arc<Metrics>,
     config: BatchConfig,
 ) {
@@ -279,6 +360,7 @@ async fn run_batch_processor(
                         &mut tasks,
                         std::mem::take(&mut pending),
                         Arc::clone(&service),
+                        cache.clone(),
                         Arc::clone(&metrics),
                         Arc::clone(&semaphore),
                     )
@@ -291,6 +373,7 @@ async fn run_batch_processor(
                         &mut tasks,
                         std::mem::take(&mut pending),
                         Arc::clone(&service),
+                        cache.clone(),
                         Arc::clone(&metrics),
                         Arc::clone(&semaphore),
                     )
@@ -301,7 +384,7 @@ async fn run_batch_processor(
     }
 
     if !pending.is_empty() {
-        spawn_batch(&mut tasks, pending, service, metrics, semaphore).await;
+        spawn_batch(&mut tasks, pending, service, cache, metrics, semaphore).await;
     }
     while let Some(result) = tasks.join_next().await {
         if let Err(error) = result {
@@ -314,6 +397,7 @@ async fn spawn_batch(
     tasks: &mut JoinSet<()>,
     batch: Vec<PendingLookup>,
     service: Arc<dyn MojangService>,
+    cache: CacheManager,
     metrics: Arc<Metrics>,
     semaphore: Arc<Semaphore>,
 ) {
@@ -334,13 +418,14 @@ async fn spawn_batch(
     }
     tasks.spawn(async move {
         let _permit = permit;
-        process_batch(batch, service.as_ref(), &metrics).await;
+        process_batch(batch, service.as_ref(), &cache, &metrics).await;
     });
 }
 
 async fn process_batch(
     mut batch: Vec<PendingLookup>,
     service: &dyn MojangService,
+    cache: &CacheManager,
     metrics: &Metrics,
 ) {
     batch.retain(|lookup| !lookup.response.is_closed());
@@ -348,22 +433,19 @@ async fn process_batch(
         return;
     }
 
-    let (names, responses): (Vec<_>, Vec<_>) = batch
-        .into_iter()
-        .map(|lookup| (lookup.name, lookup.response))
-        .unzip();
+    let names: Vec<String> = batch.iter().map(|lookup| lookup.name.clone()).collect();
     metrics.record_batch(names.len());
     tracing::info!(usernames = names.len(), "processing username batch");
 
     let profiles = match service.lookup_names(&names).await {
         Ok(profiles) => profiles,
         Err(error) => {
-            for response in responses {
+            for lookup in batch {
                 #[expect(
                     clippy::let_underscore_must_use,
                     reason = "The request may have been canceled before the error could be delivered."
                 )]
-                let _ = response.send(Err(error));
+                let _ = lookup.response.send(Err(error));
             }
             return;
         }
@@ -376,13 +458,16 @@ async fn process_batch(
         })
         .collect();
 
-    for (name, response) in names.into_iter().zip(responses) {
-        let uuid = profiles.get(&name).copied();
+    for lookup in batch {
+        let uuid = profiles.get(&lookup.name).copied();
+        // Callers may have timed out or disconnected while Mojang answered, so the cache
+        // stores the result for the next request instead of relying on the caller's load.
+        cache.insert_uuid(lookup.name, uuid).await;
         #[expect(
             clippy::let_underscore_must_use,
             reason = "The request may have been canceled before the batch completed."
         )]
-        let _ = response.send(Ok(uuid));
+        let _ = lookup.response.send(Ok(uuid));
     }
 }
 
@@ -390,6 +475,7 @@ async fn process_batch(
 mod tests {
     use std::{
         collections::HashMap,
+        net::{IpAddr, Ipv4Addr},
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
@@ -405,10 +491,24 @@ mod tests {
         cache::CacheManager,
         metrics::Metrics,
         mojang::{MojangService, UpstreamError},
+        rate_limit::ClientKey,
         types::SkinProperty,
     };
 
-    use super::{BatchConfig, BatchConfigError, BatchProcessor, LOOKUP_TIMEOUT, PendingLookup};
+    use super::{
+        BatchConfig, BatchConfigError, BatchLookup, BatchProcessor, ClientSlot, LOOKUP_TIMEOUT,
+        MAX_LOOKUPS_PER_CLIENT, PendingLookup,
+    };
+
+    const CLIENT: ClientKey = ClientKey(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)));
+    const OTHER_CLIENT: ClientKey = ClientKey(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)));
+
+    fn reserve(lookup: &BatchLookup) -> ClientSlot {
+        lookup
+            .client_lookups
+            .reserve(CLIENT)
+            .expect("the test client should have a free slot")
+    }
 
     #[derive(Default)]
     struct FakeMojangService {
@@ -543,7 +643,10 @@ mod tests {
         let lookup = processor.lookup();
 
         let started = tokio::time::Instant::now();
-        assert_eq!(lookup.lookup("Pistonmaster".to_owned()).await, Ok(None));
+        assert_eq!(
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT).await,
+            Ok(None)
+        );
         let elapsed = started.elapsed();
         assert!(elapsed <= Duration::from_secs(1), "waited {elapsed:?}");
 
@@ -569,15 +672,15 @@ mod tests {
         let lookup = processor.lookup();
 
         let (existing, missing) = tokio::join!(
-            lookup.lookup("Pistonmaster".to_owned()),
-            lookup.lookup("MissingPlayer".to_owned())
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT),
+            lookup.lookup("MissingPlayer".to_owned(), CLIENT)
         );
         assert_eq!(existing.expect("lookup should succeed"), Some(uuid));
         assert_eq!(missing.expect("lookup should succeed"), None);
 
         assert_eq!(
             lookup
-                .lookup("PISTONMASTER".to_owned())
+                .lookup("PISTONMASTER".to_owned(), CLIENT)
                 .await
                 .expect("cached lookup should succeed"),
             Some(uuid)
@@ -607,9 +710,9 @@ mod tests {
         let lookup = processor.lookup();
 
         let (first, second, third) = tokio::join!(
-            lookup.lookup("Pistonmaster".to_owned()),
-            lookup.lookup("PISTONMASTER".to_owned()),
-            lookup.lookup("pistonmaster".to_owned()),
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT),
+            lookup.lookup("PISTONMASTER".to_owned(), CLIENT),
+            lookup.lookup("pistonmaster".to_owned(), CLIENT),
         );
         assert_eq!(first, Ok(None));
         assert_eq!(second, Ok(None));
@@ -642,8 +745,8 @@ mod tests {
 
         let (_first, _second) = tokio::time::timeout(Duration::from_millis(250), async {
             tokio::join!(
-                lookup.lookup("First".to_owned()),
-                lookup.lookup("Second".to_owned())
+                lookup.lookup("First".to_owned(), CLIENT),
+                lookup.lookup("Second".to_owned(), CLIENT)
             )
         })
         .await
@@ -677,7 +780,7 @@ mod tests {
         let lookup = processor.lookup();
 
         assert_eq!(
-            lookup.lookup("Pistonmaster".to_owned()).await,
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT).await,
             Err(UpstreamError::Timeout)
         );
         let snapshot = metrics.snapshot();
@@ -704,7 +807,7 @@ mod tests {
 
         let started = tokio::time::Instant::now();
         assert_eq!(
-            lookup.lookup("Pistonmaster".to_owned()).await,
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT).await,
             Err(UpstreamError::Timeout)
         );
         assert!(started.elapsed() >= LOOKUP_TIMEOUT);
@@ -733,13 +836,17 @@ mod tests {
                 .try_send(PendingLookup {
                     name: "canceled".to_owned(),
                     response,
+                    _slot: reserve(&lookup),
                 })
                 .is_ok(),
             "the queue should accept the canceled lookup"
         );
 
         // The second lookup fills the batch.
-        assert_eq!(lookup.lookup("Pistonmaster".to_owned()).await, Ok(None));
+        assert_eq!(
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT).await,
+            Ok(None)
+        );
         assert_eq!(
             service
                 .calls
@@ -767,7 +874,7 @@ mod tests {
         let lookup = processor.lookup();
         let requests = ["First", "Second", "Third"].map(|name| {
             let lookup = lookup.clone();
-            tokio::spawn(async move { lookup.lookup(name.to_owned()).await })
+            tokio::spawn(async move { lookup.lookup(name.to_owned(), CLIENT).await })
         });
 
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -810,6 +917,7 @@ mod tests {
             let sent = lookup.sender.try_send(PendingLookup {
                 name: name.to_owned(),
                 response,
+                _slot: reserve(&lookup),
             });
             assert!(sent.is_ok(), "the queue should accept {name}");
             receiver
@@ -831,7 +939,7 @@ mod tests {
         // The third lookup fills the queue, so the next one is rejected.
         let queued = queue("third");
         assert_eq!(
-            lookup.lookup("Fourth".to_owned()).await,
+            lookup.lookup("Fourth".to_owned(), CLIENT).await,
             Err(UpstreamError::Overloaded)
         );
         assert_eq!(metrics.snapshot().batch_queue_rejections, 1);
@@ -849,6 +957,89 @@ mod tests {
         processor.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn limits_how_many_lookups_one_client_holds() {
+        let service = Arc::new(BlockingMojangService::default());
+        let processor = BatchProcessor::start(
+            Arc::<BlockingMojangService>::clone(&service),
+            CacheManager::default(),
+            Arc::new(Metrics::default()),
+            BatchConfig::new(1, Duration::from_secs(30), 1_024, 1)
+                .expect("test batch configuration should be valid"),
+        );
+        let lookup = processor.lookup();
+        let spawn_lookup = |name: String, client| {
+            let lookup = lookup.clone();
+            tokio::spawn(async move { lookup.lookup(name, client).await })
+        };
+        let mut requests: Vec<_> = (0..MAX_LOOKUPS_PER_CLIENT)
+            .map(|index| spawn_lookup(format!("player{index}"), CLIENT))
+            .collect();
+        wait_until(
+            || lookup.client_lookups.held_by(CLIENT) == MAX_LOOKUPS_PER_CLIENT,
+            "the client should fill its share of the queue",
+        )
+        .await;
+
+        assert_eq!(
+            lookup.lookup("OneTooMany".to_owned(), CLIENT).await,
+            Err(UpstreamError::Overloaded)
+        );
+        requests.push(spawn_lookup("Other".to_owned(), OTHER_CLIENT));
+        wait_until(
+            || lookup.client_lookups.held_by(OTHER_CLIENT) == 1,
+            "another client should still queue a lookup",
+        )
+        .await;
+
+        service.release.add_permits(requests.len());
+        for request in requests {
+            assert_eq!(request.await.expect("lookup task should finish"), Ok(None));
+        }
+        assert_eq!(lookup.client_lookups.held_by(CLIENT), 0);
+        assert!(
+            lookup
+                .client_lookups
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
+            "answered lookups release every slot"
+        );
+
+        drop(lookup);
+        processor.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn caches_results_that_arrive_after_the_caller_timed_out() {
+        let service = Arc::new(BlockingMojangService::default());
+        let cache = CacheManager::default();
+        let processor = BatchProcessor::start(
+            Arc::<BlockingMojangService>::clone(&service),
+            cache.clone(),
+            Arc::new(Metrics::default()),
+            test_config(1),
+        );
+        let lookup = processor.lookup();
+
+        assert_eq!(
+            lookup.lookup("Pistonmaster".to_owned(), CLIENT).await,
+            Err(UpstreamError::Timeout)
+        );
+        service.release.add_permits(1);
+        drop(lookup);
+        // Shutdown waits for the running batch to finish.
+        processor.shutdown().await;
+
+        let cached = cache
+            .get_or_try_insert_uuid("pistonmaster".to_owned(), async { Err::<_, ()>(()) })
+            .await
+            .expect("the late result should be cached");
+        assert!(cached.was_hit());
+        assert_eq!(cached.into_value(), None);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn shutdown_answers_lookups_that_are_still_queued() {
         let service = Arc::new(FakeMojangService::default());
@@ -862,7 +1053,7 @@ mod tests {
         let lookup = processor.lookup();
         let requests = ["First", "Second"].map(|name| {
             let lookup = lookup.clone();
-            tokio::spawn(async move { lookup.lookup(name.to_owned()).await })
+            tokio::spawn(async move { lookup.lookup(name.to_owned(), CLIENT).await })
         });
         // With paused time, the clock only advances once every task waits, so both lookups
         // reach the processor long before the batch interval elapses.
@@ -902,7 +1093,7 @@ mod tests {
             "lookups are unavailable after shutdown"
         );
         assert_eq!(
-            lookup.lookup("after-shutdown".to_owned()).await,
+            lookup.lookup("after-shutdown".to_owned(), CLIENT).await,
             Err(UpstreamError::BatchStopped)
         );
     }

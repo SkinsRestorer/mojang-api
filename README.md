@@ -153,7 +153,7 @@ The service is available at `http://localhost:3000`. Pass configuration with `-e
 
 Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and sends a batch when ten requests are queued, and sends any smaller batch every second. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
 
-A username lookup fails with `503` when the batch queue is full or when its batch does not finish within 7 seconds.
+A username lookup fails with `503` when the batch queue is full, when the client already has 32 username lookups queued or in a running batch, or when its batch does not finish within 7 seconds. The client is the same address that the rate limit uses. A batch caches every result it gets from Mojang, even when the request that queued the name has already timed out or disconnected.
 
 Moka stores up to 100,000 username entries and uses a 32 MiB weighted budget for skin entries. Usernames expire after six hours and skins after one hour, because players can change skins at any time. Negative results expire after 15 minutes so newly created profiles and skins become visible sooner. A request counts as a cache hit only when the value was already cached.
 
