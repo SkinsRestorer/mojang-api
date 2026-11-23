@@ -10,12 +10,6 @@
       "description": "Automerged updates deploy to production, so wait until a compromised release is likely to be found and yanked. Pin and digest updates have no release timestamp and would never merge.",
       "matchUpdateTypes": ["minor", "patch"],
       "minimumReleaseAge": "3 days"
-    },
-    {
-      "description": "Only the publish workflow on main checks the Railpack checksums, so a passing branch build does not prove the update works. Keep it in its own pull request for manual review.",
-      "matchPackageNames": ["railwayapp/railpack"],
-      "groupName": null,
-      "automerge": false
     }
   ],
   "customManagers": [
@@ -25,22 +19,6 @@
       "managerFilePatterns": ["/^\\.github/workflows/cargo-deny\\.yml$/"],
       "matchStrings": ["tool: (?<depName>cargo-deny)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
       "datasourceTemplate": "crate"
-    },
-    {
-      "customType": "regex",
-      "description": "Railpack release installed by the publish workflow. Update its SHA-256 checksums with the version.",
-      "managerFilePatterns": ["/^\\.github/workflows/publish-ghcr\\.yml$/"],
-      "matchStrings": ["RAILPACK_VERSION: (?<currentValue>v\\S+)"],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "railwayapp/railpack"
-    },
-    {
-      "customType": "regex",
-      "description": "BuildKit image started by the publish workflow.",
-      "managerFilePatterns": ["/^\\.github/workflows/publish-ghcr\\.yml$/"],
-      "matchStrings": ["moby/buildkit:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "moby/buildkit"
     }
   ]
 }

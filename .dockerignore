@@ -1,5 +1,6 @@
-.env*
-.git
-.github
-.idea
-/target
+# Only the Rust sources, manifests, and toolchain file are needed to build the image.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!src/

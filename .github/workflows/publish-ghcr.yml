@@ -48,51 +48,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Railpack
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Prepare image tag
         env:
           ARCH: ${{ matrix.arch }}
-          # Renovate updates this version in a pull request that does not run this workflow.
-          # Copy the new checksums from the release's checksums.txt before merging it.
-          RAILPACK_VERSION: v0.43.0
-        run: |
-          case "$ARCH" in
-            amd64)
-              target=x86_64-unknown-linux-musl
-              sha256=248a8f60f36854aabed6124113631078a802de3461660855fc4de9c26065c1fb
-              ;;
-            arm64)
-              target=arm64-unknown-linux-musl
-              sha256=732ece14eb4f4676a43ebba19431f954edf7b130acb76159ef0f2ff86ac42ac9
-              ;;
-            *)
-              echo "::error::Unsupported architecture $ARCH"
-              exit 1
-              ;;
-          esac
+        run: echo "IMAGE_TAG=${REGISTRY}/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::12}-${ARCH}" >> "$GITHUB_ENV"
 
-          archive="$RUNNER_TEMP/railpack.tar.gz"
-          curl --fail --silent --show-error --location --output "$archive" \
-            "https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${target}.tar.gz"
-          echo "${sha256}  ${archive}" | sha256sum --check --strict
-
-          mkdir -p "$HOME/.local/bin"
-          tar -xzf "$archive" -C "$HOME/.local/bin" railpack
-          "$HOME/.local/bin/railpack" --version
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Start BuildKit
-        run: |
-          docker run --rm --privileged -d --name railpack-buildkit moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
-          echo "BUILDKIT_HOST=docker-container://railpack-buildkit" >> "$GITHUB_ENV"
-
-      - name: Build and push image with Railpack
-        env:
-          ARCH: ${{ matrix.arch }}
-        run: |
-          tag="${REGISTRY}/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::12}-${ARCH}"
-
-          railpack build --name "$tag" .
-          docker push "$tag"
+      - name: Build and push image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
 
   publish:
     name: Publish multi-arch image

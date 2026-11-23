@@ -113,15 +113,21 @@ Every error response has a JSON body such as `{"error":"INVALID_NAME"}`. A reque
 | `503` | `INTERNAL_TIMEOUT` | Mojang did not respond in time |
 | `503` | `SERVICE_UNAVAILABLE` | Mojang rate-limited the service, or the service is at capacity. Retry after `Retry-After` seconds |
 
-## Deploy with Railpack
+## Build the image
 
-Railpack detects the Rust project from `Cargo.toml`, installs its system dependencies, uses the version pinned in `rust-toolchain.toml`, builds the release binary, and starts `./bin/mojang-api`. No custom Railpack configuration or start command is required.
+The `Dockerfile` builds the release binary with the official Rust image and copies it into the `gcr.io/distroless/cc-debian13:nonroot` runtime image. The runtime image has no shell or package manager. It runs the service as the `nonroot` user (UID 65532) and has the CA certificates that the service needs to verify Mojang's TLS certificates. The binary is the entrypoint, so it runs as PID 1 and receives `SIGTERM` directly.
+
+Build the image locally:
+
+```bash
+docker build -t mojang-api .
+```
 
 Set production configuration variables in the deployment environment.
 
 ## Run the published image
 
-Pushes to `main` build a release image with Railpack and publish it to
+Pushes to `main` build the image from the `Dockerfile` and publish it to
 `ghcr.io/skinsrestorer/mojang-api` with these tags:
 
 - `latest`: the latest published build from `main`
