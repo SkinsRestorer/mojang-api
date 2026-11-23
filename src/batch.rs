@@ -16,14 +16,24 @@ use uuid::Uuid;
 use crate::{
     cache::{CacheLoad, CacheManager},
     metrics::Metrics,
-    mojang::{MojangService, UpstreamError},
+    mojang::{MojangService, UPSTREAM_BUDGET, UpstreamError},
 };
 
 const BATCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Mojang's bulk profile endpoints accept at most 10 names per request.
 const MAX_BATCH_SIZE: usize = 10;
-/// Bounds how long a request waits for its batch, including time spent queued.
-const LOOKUP_TIMEOUT: Duration = Duration::from_secs(25);
+/// Flushes a partial batch after this long. Each tick sends at most one partial bulk request,
+/// which stays near Mojang's sustained rate limit, while a cold lookup waits half a second on
+/// average.
+const BATCH_INTERVAL: Duration = Duration::from_secs(1);
+/// Bounds how long a request waits for its batch, including time spent queued. It covers one
+/// batch interval plus the Mojang budget, with a second of slack for busy batch slots, and stays
+/// below the router deadline in `app.rs`.
+pub(crate) const LOOKUP_TIMEOUT: Duration = Duration::from_secs(7);
+const _: () = assert!(
+    BATCH_INTERVAL.as_millis() + UPSTREAM_BUDGET.as_millis() < LOOKUP_TIMEOUT.as_millis(),
+    "a lookup must outlast its batch interval and the Mojang call"
+);
 
 #[derive(Debug, Clone, Copy)]
 pub struct BatchConfig {
@@ -34,11 +44,11 @@ pub struct BatchConfig {
 }
 
 impl Default for BatchConfig {
-    /// Flushes full batches of 10 names, or any pending names every three seconds.
+    /// Flushes full batches of 10 names, or any pending names every second.
     fn default() -> Self {
         Self {
             size: NonZeroUsize::new(MAX_BATCH_SIZE).unwrap_or(NonZeroUsize::MIN),
-            interval: Duration::from_secs(3),
+            interval: BATCH_INTERVAL,
             queue_capacity: NonZeroUsize::new(1_024).unwrap_or(NonZeroUsize::MIN),
             max_in_flight_batches: NonZeroUsize::new(16).unwrap_or(NonZeroUsize::MIN),
         }
@@ -509,6 +519,27 @@ mod tests {
             BatchConfig::new(1, Duration::from_secs(1), 1, 0),
             Err(BatchConfigError::ZeroMaxInFlightBatches)
         ));
+    }
+
+    // The paused clock makes the wait measurable without taking real time.
+    #[tokio::test(start_paused = true)]
+    async fn default_config_sends_a_lone_lookup_within_a_second() {
+        let service = Arc::new(FakeMojangService::default());
+        let processor = BatchProcessor::start(
+            Arc::<FakeMojangService>::clone(&service),
+            CacheManager::default(),
+            Arc::new(Metrics::default()),
+            BatchConfig::default(),
+        );
+        let lookup = processor.lookup();
+
+        let started = tokio::time::Instant::now();
+        assert_eq!(lookup.lookup("Pistonmaster".to_owned()).await, Ok(None));
+        let elapsed = started.elapsed();
+        assert!(elapsed <= Duration::from_secs(1), "waited {elapsed:?}");
+
+        drop(lookup);
+        processor.shutdown().await;
     }
 
     #[tokio::test]

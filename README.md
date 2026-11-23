@@ -100,7 +100,7 @@ Lookup responses for existing profiles include `Cache-Control: public, max-age=9
 
 ### Errors
 
-Every error response has a JSON body such as `{"error":"INVALID_NAME"}`. A request that runs longer than 30 seconds gets `503` with `INTERNAL_TIMEOUT`.
+Every error response has a JSON body such as `{"error":"INVALID_NAME"}`. A request that runs longer than 8 seconds gets `503` with `INTERNAL_TIMEOUT`.
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
@@ -151,17 +151,19 @@ The service is available at `http://localhost:3000`. Pass configuration with `-e
 
 ## Architecture
 
-Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and sends a batch when ten requests are queued, and sends any smaller batch every three seconds. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
+Axum serves the HTTP API on Tokio. A bounded channel collects username lookups and sends a batch when ten requests are queued, and sends any smaller batch every second. Concurrent requests for the same username or UUID share one in-flight lookup instead of creating duplicate Mojang requests.
 
-A username lookup fails with `503` when the batch queue is full or when its batch does not finish within 25 seconds.
+A username lookup fails with `503` when the batch queue is full or when its batch does not finish within 7 seconds.
 
 Moka stores up to 100,000 username entries and uses a 32 MiB weighted budget for skin entries. Usernames expire after six hours and skins after one hour, because players can change skins at any time. Negative results expire after 15 minutes so newly created profiles and skins become visible sooner. A request counts as a cache hit only when the value was already cached.
 
-Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 15-second timeout and reject response bodies larger than 1 MiB. Each configured proxy has its own HTTP client, and each request picks a random proxy. When Mojang answers `429`, the service stops using that proxy for that Mojang API until the `Retry-After` delay passes (30 seconds by default), and retries the request once through another proxy. At most 64 skin lookups run at the same time.
+Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 4-second timeout and reject response bodies larger than 1 MiB. Each configured proxy has its own HTTP client, and each request picks a random proxy. When Mojang answers `429`, the service stops using that proxy for that Mojang API until the `Retry-After` delay passes (30 seconds by default), and retries the request once through another proxy if at least 2 seconds of a 5-second budget remain. The retry gets only the rest of that budget. At most 64 skin lookups run at the same time.
+
+The timeouts fit the SkinsRestorer plugin, which stops waiting after 5 seconds. A skin lookup finishes or fails within the 5-second Mojang budget. A username lookup can also wait up to one second for its batch. The 7-second lookup deadline and the 8-second request deadline only catch work that is stuck, such as batches that wait for a free batch slot.
 
 The rate limiter uses the generic cell rate algorithm, so a client cannot send two bursts across a window boundary. It shards client state to reduce lock contention and caps the number of tracked clients.
 
-The HTTP server closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 30 seconds.
+The HTTP server closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 8 seconds.
 
 Metrics remain cumulative in memory. A Discord report advances its reporting window only after Discord accepts it, so transport errors and non-successful HTTP responses do not discard counters.
 

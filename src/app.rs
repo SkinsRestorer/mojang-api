@@ -23,12 +23,12 @@ use tracing::Level;
 use utoipa::OpenApi;
 
 use crate::{
-    batch::BatchLookup,
+    batch::{BatchLookup, LOOKUP_TIMEOUT},
     cache::{CacheLoad, CacheManager},
     docs,
     error::AppError,
     metrics::Metrics,
-    mojang::MojangService,
+    mojang::{MojangService, UPSTREAM_BUDGET},
     rate_limit::{RateLimiter, enforce_rate_limit},
     types::{
         ErrorResponse, HealthResponse, HealthStatus, SkinLookupResponse, SkinProperty,
@@ -39,8 +39,14 @@ use crate::{
 
 const RATE_LIMIT: NonZeroU32 = NonZeroU32::new(1_000).unwrap();
 const RATE_LIMIT_WINDOW: Duration = Duration::from_mins(1);
-/// A last-resort deadline. Lookups normally fail sooner through their own timeouts.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// A last-resort deadline. Lookups normally fail sooner through the Mojang budget in
+/// `mojang.rs` and the username lookup deadline in `batch.rs`.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const _: () = assert!(
+    LOOKUP_TIMEOUT.as_millis() < REQUEST_TIMEOUT.as_millis()
+        && UPSTREAM_BUDGET.as_millis() < REQUEST_TIMEOUT.as_millis(),
+    "lookups must fail with their own error before the router deadline"
+);
 const FOUND_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=900");
 /// Missing profiles may be created soon, so clients should not keep them for long.
 const NOT_FOUND_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("public, max-age=60");

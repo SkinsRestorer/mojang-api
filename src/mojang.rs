@@ -31,12 +31,20 @@ use crate::{
 };
 
 const MAX_UPSTREAM_RESPONSE_BYTES: usize = 1024 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Bounds one Mojang request. The `SkinsRestorer` plugin gives up after 5 seconds, so a slower
+/// answer is unlikely to reach a player anyway.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
+/// Bounds all attempts of one Mojang call, including a retry after `429`. The batch lookup
+/// deadline in `batch.rs` and the router deadline in `app.rs` build on this value.
+pub(crate) const UPSTREAM_BUDGET: Duration = Duration::from_secs(5);
+/// A retry needs at least this much of [`UPSTREAM_BUDGET`] left to have a fair chance.
+const MIN_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Limits concurrent session server requests, so random UUIDs cannot flood Mojang.
 const MAX_CONCURRENT_SKIN_LOOKUPS: usize = 64;
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_mins(10);
-/// A rate-limited request is retried once through another outbound route.
+/// A rate-limited request is retried once through another outbound route, if
+/// [`retry_timeout`] allows it.
 const MAX_ATTEMPTS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -224,17 +232,27 @@ impl MojangHttpClient {
         sent_bytes: usize,
         build: impl Fn(&Client) -> RequestBuilder,
     ) -> Result<(StatusCode, Bytes), UpstreamError> {
+        let started = tokio::time::Instant::now();
         for attempt in 0..MAX_ATTEMPTS {
+            let request_timeout = if attempt > 0 {
+                let Some(timeout) = retry_timeout(started.elapsed()) else {
+                    break;
+                };
+                Some(timeout)
+            } else {
+                None
+            };
             let route = self.choose_route(api).inspect_err(|_| {
                 // A retry follows a 429 that already counted as an error.
                 if attempt == 0 {
                     self.metrics.increment_mojang_cooldown_rejections();
                 }
             })?;
-            match self
-                .send(route, api, build(&route.client), sent_bytes)
-                .await
-            {
+            let mut request = build(&route.client);
+            if let Some(timeout) = request_timeout {
+                request = request.timeout(timeout);
+            }
+            match self.send(route, api, request, sent_bytes).await {
                 Err(UpstreamError::RateLimited { .. }) => {}
                 result => return result,
             }
@@ -419,6 +437,13 @@ impl MojangService for MojangHttpClient {
     }
 }
 
+/// Returns the timeout for a retry that starts `elapsed` after the first attempt, or `None` when
+/// too little of [`UPSTREAM_BUDGET`] remains.
+fn retry_timeout(elapsed: Duration) -> Option<Duration> {
+    let remaining = UPSTREAM_BUDGET.saturating_sub(elapsed);
+    (remaining >= MIN_RETRY_TIMEOUT).then(|| remaining.min(REQUEST_TIMEOUT))
+}
+
 /// Returns a random index below `len`, or 0 when `len` is 0 or the OS has no randomness.
 ///
 /// The modulo bias does not matter for the few routes and endpoints this picks from.
@@ -561,7 +586,7 @@ mod tests {
 
     use super::{
         MojangEndpoints, MojangHttpClient, MojangService, ProxyParseError, UpstreamError,
-        parse_proxy_url, try_extend_body,
+        parse_proxy_url, retry_timeout, try_extend_body,
     };
 
     const PLAYER: &str = "b1ae07784817436c96a3a72c67cda060";
@@ -808,6 +833,45 @@ mod tests {
         );
         assert_eq!(short_connections.load(Ordering::SeqCst), 1);
         assert_eq!(long_connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn gives_a_retry_only_the_rest_of_the_budget() {
+        let secs = Duration::from_secs_f32;
+        assert_eq!(retry_timeout(Duration::ZERO), Some(secs(4.0)));
+        assert_eq!(retry_timeout(secs(1.0)), Some(secs(4.0)));
+        assert_eq!(retry_timeout(secs(2.5)), Some(secs(2.5)));
+        assert_eq!(retry_timeout(secs(3.0)), Some(secs(2.0)));
+        assert_eq!(retry_timeout(secs(3.5)), None);
+        assert_eq!(retry_timeout(secs(60.0)), None);
+    }
+
+    // The paused clock skips the slow responses, so the test takes no real time.
+    #[tokio::test(start_paused = true)]
+    async fn skips_the_retry_when_a_slow_rate_limit_used_up_the_budget() {
+        let slow_rate_limit = || {
+            Router::new().route(
+                "/profile/{uuid}",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_millis(3_500)).await;
+                    (StatusCode::TOO_MANY_REQUESTS, [(RETRY_AFTER, "30")])
+                }),
+            )
+        };
+        let (first, first_connections) = serve(slow_rate_limit()).await;
+        let (second, second_connections) = serve(slow_rate_limit()).await;
+        let proxies = [first, second].map(|base| Url::parse(&base).expect("URL should parse"));
+        let client = client("http://mojang.invalid", &proxies);
+
+        assert!(matches!(
+            client.lookup_skin(uuid(PLAYER)).await,
+            Err(UpstreamError::RateLimited { .. })
+        ));
+        assert_eq!(
+            first_connections.load(Ordering::SeqCst) + second_connections.load(Ordering::SeqCst),
+            1,
+            "a retry would not finish within the budget"
+        );
     }
 
     #[test]
