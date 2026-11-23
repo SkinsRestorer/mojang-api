@@ -22,7 +22,7 @@ pub enum AppError {
     Unavailable {
         retry_after: Duration,
     },
-    /// Mojang answered with an unexpected HTTP status.
+    /// Mojang answered with an unexpected HTTP status or an invalid body, or could not be reached.
     BadGateway,
     Internal,
 }
@@ -35,8 +35,10 @@ impl From<UpstreamError> for AppError {
             UpstreamError::Overloaded => Self::Unavailable {
                 retry_after: Duration::from_secs(1),
             },
-            UpstreamError::HttpStatus(_) => Self::BadGateway,
-            UpstreamError::Transport | UpstreamError::InvalidResponse => Self::Internal,
+            UpstreamError::HttpStatus(_)
+            | UpstreamError::Transport
+            | UpstreamError::InvalidResponse => Self::BadGateway,
+            UpstreamError::BatchStopped => Self::Internal,
         }
     }
 }
@@ -153,9 +155,9 @@ mod tests {
         assert_eq!(
             render(UpstreamError::Transport).await,
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::BAD_GATEWAY,
                 None,
-                r#"{"error":"INTERNAL_ERROR"}"#.to_owned()
+                r#"{"error":"UPSTREAM_ERROR"}"#.to_owned()
             )
         );
         assert_eq!(
@@ -168,6 +170,14 @@ mod tests {
         );
         assert_eq!(
             render(UpstreamError::InvalidResponse).await,
+            (
+                StatusCode::BAD_GATEWAY,
+                None,
+                r#"{"error":"UPSTREAM_ERROR"}"#.to_owned()
+            )
+        );
+        assert_eq!(
+            render(UpstreamError::BatchStopped).await,
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 None,

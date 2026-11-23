@@ -91,6 +91,9 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
     let limited_routes = Router::new()
         .route("/mojang/uuid/{name}", get(lookup_uuid))
         .route("/mojang/skin/{uuid}", get(lookup_skin))
+        // Without a path segment the handlers see a rejected `Path` and answer with 400.
+        .route("/mojang/uuid/", get(lookup_uuid))
+        .route("/mojang/skin/", get(lookup_skin))
         .merge(docs::router(ApiDoc::openapi()))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -149,8 +152,8 @@ pub fn build_router(state: AppState, trusted_proxies: Vec<IpNet>) -> Router {
         (status = "5XX", description = "Mojang failed or is unavailable. The examples list each status and code.", body = ErrorResponse,
             headers(("Retry-After" = u64, description = "Seconds to wait before retrying, for `SERVICE_UNAVAILABLE`")),
             examples(
-                ("500 INTERNAL_ERROR" = (summary = "500: the request to Mojang failed", value = json!({"error": "INTERNAL_ERROR"}))),
-                ("502 UPSTREAM_ERROR" = (summary = "502: Mojang returned an unexpected status", value = json!({"error": "UPSTREAM_ERROR"}))),
+                ("500 INTERNAL_ERROR" = (summary = "500: this service failed internally", value = json!({"error": "INTERNAL_ERROR"}))),
+                ("502 UPSTREAM_ERROR" = (summary = "502: Mojang could not be reached, returned an unexpected status, or sent an invalid response", value = json!({"error": "UPSTREAM_ERROR"}))),
                 ("503 INTERNAL_TIMEOUT" = (summary = "503: Mojang timed out", value = json!({"error": "INTERNAL_TIMEOUT"}))),
                 ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service, or this service is at capacity", value = json!({"error": "SERVICE_UNAVAILABLE"})))
             ))
@@ -194,8 +197,8 @@ async fn lookup_uuid(
         (status = "5XX", description = "Mojang failed or is unavailable. The examples list each status and code.", body = ErrorResponse,
             headers(("Retry-After" = u64, description = "Seconds to wait before retrying, for `SERVICE_UNAVAILABLE`")),
             examples(
-                ("500 INTERNAL_ERROR" = (summary = "500: the request to Mojang failed", value = json!({"error": "INTERNAL_ERROR"}))),
-                ("502 UPSTREAM_ERROR" = (summary = "502: Mojang returned an unexpected status", value = json!({"error": "UPSTREAM_ERROR"}))),
+                ("500 INTERNAL_ERROR" = (summary = "500: this service failed internally", value = json!({"error": "INTERNAL_ERROR"}))),
+                ("502 UPSTREAM_ERROR" = (summary = "502: Mojang could not be reached, returned an unexpected status, or sent an invalid response", value = json!({"error": "UPSTREAM_ERROR"}))),
                 ("503 INTERNAL_TIMEOUT" = (summary = "503: Mojang timed out", value = json!({"error": "INTERNAL_TIMEOUT"}))),
                 ("503 SERVICE_UNAVAILABLE" = (summary = "503: Mojang is rate-limiting this service, or this service is at capacity", value = json!({"error": "SERVICE_UNAVAILABLE"})))
             ))
@@ -468,17 +471,23 @@ mod tests {
             }
         );
 
-        let invalid_uuid = app
-            .oneshot(get("/mojang/skin/not-a-uuid"))
-            .await
-            .expect("request should succeed");
-        assert_eq!(invalid_uuid.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            response_json::<ErrorResponse>(invalid_uuid).await,
-            ErrorResponse {
-                error: ErrorType::InvalidUuid
-            }
-        );
+        for (path, error) in [
+            ("/mojang/skin/not-a-uuid", ErrorType::InvalidUuid),
+            ("/mojang/uuid/", ErrorType::InvalidName),
+            ("/mojang/skin/", ErrorType::InvalidUuid),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(get(path))
+                .await
+                .expect("request should succeed");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            assert_eq!(
+                response_json::<ErrorResponse>(response).await,
+                ErrorResponse { error },
+                "{path}"
+            );
+        }
 
         batch.shutdown().await;
     }

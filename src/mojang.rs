@@ -53,6 +53,9 @@ pub enum UpstreamError {
     Transport,
     #[error("Mojang returned an invalid response")]
     InvalidResponse,
+    /// The batch processor stopped, so this service cannot run the lookup.
+    #[error("the batch processor has stopped")]
+    BatchStopped,
 }
 
 #[async_trait]

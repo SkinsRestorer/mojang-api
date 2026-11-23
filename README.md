@@ -104,12 +104,12 @@ Every error response has a JSON body such as `{"error":"INVALID_NAME"}`. A reque
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
-| `400` | `INVALID_NAME`, `INVALID_UUID` | The username or UUID is not valid |
+| `400` | `INVALID_NAME`, `INVALID_UUID` | The username or UUID is not valid or is empty |
 | `404` | `NOT_FOUND` | The path does not exist |
 | `405` | `METHOD_NOT_ALLOWED` | The path does not support the method |
 | `429` | `RATE_LIMITED` | The client exceeded its rate limit. Retry after `Retry-After` seconds |
-| `500` | `INTERNAL_ERROR` | The request to Mojang failed or Mojang sent an invalid response |
-| `502` | `UPSTREAM_ERROR` | Mojang returned an unexpected HTTP status |
+| `500` | `INTERNAL_ERROR` | The service failed internally, for example because username batching stopped |
+| `502` | `UPSTREAM_ERROR` | The request to Mojang failed, Mojang returned an unexpected HTTP status, or Mojang sent an invalid response |
 | `503` | `INTERNAL_TIMEOUT` | Mojang did not respond in time |
 | `503` | `SERVICE_UNAVAILABLE` | Mojang rate-limited the service, or the service is at capacity. Retry after `Retry-After` seconds |
 

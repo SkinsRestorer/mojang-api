@@ -132,14 +132,14 @@ impl BatchLookup {
                         }
                         TrySendError::Closed(_) => {
                             warn!("could not queue Mojang lookup because batching has stopped");
-                            UpstreamError::Transport
+                            UpstreamError::BatchStopped
                         }
                     })?;
                 match timeout(LOOKUP_TIMEOUT, receiver).await {
                     Ok(Ok(result)) => result,
                     Ok(Err(error)) => {
                         warn!(%error, "Mojang lookup ended without a response");
-                        Err(UpstreamError::Transport)
+                        Err(UpstreamError::BatchStopped)
                     }
                     Err(_) => {
                         warn!("Mojang lookup did not finish before the deadline");
@@ -861,7 +861,7 @@ mod tests {
         );
         assert_eq!(
             lookup.lookup("after-shutdown".to_owned()).await,
-            Err(UpstreamError::Transport)
+            Err(UpstreamError::BatchStopped)
         );
     }
 }
