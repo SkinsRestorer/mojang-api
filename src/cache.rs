@@ -54,8 +54,8 @@ impl CacheManager {
                 .expire_after(name_expiry)
                 .build(),
             skins: Cache::builder()
-                .weigher(|uuid: &Uuid, property: &Option<Arc<SkinProperty>>| {
-                    skin_entry_weight(uuid, property.as_ref())
+                .weigher(|_uuid: &Uuid, property: &Option<Arc<SkinProperty>>| {
+                    skin_entry_weight(property.as_deref())
                 })
                 .max_capacity(skin_capacity_bytes)
                 .expire_after(skin_expiry)
@@ -153,16 +153,6 @@ impl<K, V> Expiry<K, Option<V>> for OptionalValueExpiry {
     ) -> Option<Duration> {
         Some(self.ttl_for(value.as_ref()))
     }
-
-    fn expire_after_update(
-        &self,
-        _key: &K,
-        value: &Option<V>,
-        _updated_at: std::time::Instant,
-        _duration_until_expiry: Option<Duration>,
-    ) -> Option<Duration> {
-        Some(self.ttl_for(value.as_ref()))
-    }
 }
 
 impl OptionalValueExpiry {
@@ -175,7 +165,7 @@ impl OptionalValueExpiry {
     }
 }
 
-fn skin_entry_weight(_uuid: &Uuid, property: Option<&Arc<SkinProperty>>) -> u32 {
+fn skin_entry_weight(property: Option<&SkinProperty>) -> u32 {
     let payload_bytes = property.map_or(0, |property| {
         property
             .value
@@ -201,15 +191,64 @@ mod tests {
 
     use super::{CacheManager, OptionalValueExpiry};
 
-    #[test]
-    fn expires_negative_results_sooner() {
+    #[tokio::test]
+    async fn expires_negative_results_before_positive_results() {
         let expiry = OptionalValueExpiry {
-            positive_ttl: Duration::from_hours(6),
-            negative_ttl: Duration::from_mins(15),
+            positive_ttl: Duration::from_secs(60),
+            negative_ttl: Duration::from_millis(50),
         };
+        let cache = CacheManager::build(100, 1024 * 1024, expiry, expiry);
+        let found = Uuid::from_u128(1);
+        let load = |value| async move { Ok::<_, ()>(value) };
 
-        assert_eq!(expiry.ttl_for(Some(&())), Duration::from_hours(6));
-        assert_eq!(expiry.ttl_for::<()>(None), Duration::from_mins(15));
+        for (name, value) in [("found", Some(found)), ("missing", None)] {
+            let result = cache
+                .get_or_try_insert_uuid(name.to_owned(), load(value))
+                .await
+                .expect("cache load should succeed");
+            assert!(!result.was_hit());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let found_again = cache
+            .get_or_try_insert_uuid("found".to_owned(), load(None))
+            .await
+            .expect("cache lookup should succeed");
+        assert!(
+            found_again.was_hit(),
+            "positive results outlive the negative TTL"
+        );
+        assert_eq!(found_again.into_value(), Some(found));
+
+        let missing_again = cache
+            .get_or_try_insert_uuid("missing".to_owned(), load(Some(found)))
+            .await
+            .expect("cache reload should succeed");
+        assert!(
+            !missing_again.was_hit(),
+            "negative results expire after their TTL"
+        );
+        assert_eq!(missing_again.into_value(), Some(found));
+    }
+
+    #[tokio::test]
+    async fn does_not_cache_failed_loads() {
+        let cache = CacheManager::default();
+
+        let error = cache
+            .get_or_try_insert_uuid("player".to_owned(), async {
+                Err::<Option<Uuid>, _>("down")
+            })
+            .await
+            .expect_err("failed load should return its error");
+        assert_eq!(*error, "down");
+
+        let retried = cache
+            .get_or_try_insert_uuid("player".to_owned(), async { Ok::<_, &str>(None) })
+            .await
+            .expect("retry should run the loader again");
+        assert!(!retried.was_hit());
+        assert_eq!(retried.into_value(), None);
     }
 
     #[tokio::test]
