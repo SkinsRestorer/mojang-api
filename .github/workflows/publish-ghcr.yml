@@ -132,7 +132,7 @@ jobs:
         run: |
           : "${DOKPLOY_WEBHOOK_URL:?Set the DOKPLOY_WEBHOOK_URL repository secret}"
 
-          status=$(curl --fail --silent --show-error --output /dev/null \
+          status=$(curl --silent --show-error --output /dev/null \
             --connect-timeout 10 --max-time 60 \
             --write-out '%{http_code}' \
             --request POST "$DOKPLOY_WEBHOOK_URL" \
