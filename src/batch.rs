@@ -2,7 +2,11 @@ use std::{collections::HashMap, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use thiserror::Error;
 use tokio::{
-    sync::{Semaphore, mpsc, oneshot},
+    sync::{
+        Semaphore,
+        mpsc::{self, error::TrySendError},
+        oneshot,
+    },
     task::{JoinHandle, JoinSet},
     time::{MissedTickBehavior, interval, timeout},
 };
@@ -12,6 +16,10 @@ use uuid::Uuid;
 use crate::{cache::CacheManager, metrics::Metrics, mojang::MojangService, mojang::UpstreamError};
 
 const BATCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Mojang's bulk profile endpoints accept at most 10 names per request.
+pub const MAX_BATCH_SIZE: usize = 10;
+/// Bounds how long a request waits for its batch, including time spent queued.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(25);
 
 #[derive(Debug, Clone, Copy)]
 pub struct BatchConfig {
@@ -26,7 +34,8 @@ impl BatchConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error when any limit or the batching interval is zero.
+    /// Returns an error when any limit or the batching interval is zero, or when the batch size
+    /// exceeds [`MAX_BATCH_SIZE`].
     pub fn new(
         size: usize,
         interval: Duration,
@@ -34,6 +43,9 @@ impl BatchConfig {
         max_in_flight_batches: usize,
     ) -> Result<Self, BatchConfigError> {
         let size = NonZeroUsize::new(size).ok_or(BatchConfigError::ZeroSize)?;
+        if size.get() > MAX_BATCH_SIZE {
+            return Err(BatchConfigError::SizeTooLarge);
+        }
         if interval.is_zero() {
             return Err(BatchConfigError::ZeroInterval);
         }
@@ -55,6 +67,8 @@ impl BatchConfig {
 pub enum BatchConfigError {
     #[error("batch size must be greater than zero")]
     ZeroSize,
+    #[error("batch size must not exceed {MAX_BATCH_SIZE}")]
+    SizeTooLarge,
     #[error("batch interval must be greater than zero")]
     ZeroInterval,
     #[error("queue capacity must be greater than zero")]
@@ -80,7 +94,8 @@ impl BatchLookup {
     ///
     /// # Errors
     ///
-    /// Returns an upstream error when the queue is unavailable or Mojang cannot resolve the batch.
+    /// Returns an upstream error when the queue is full or closed, when the lookup does not
+    /// finish in time, or when Mojang cannot resolve the batch.
     pub async fn lookup(&self, mut name: String) -> Result<Option<Uuid>, UpstreamError> {
         name.make_ascii_lowercase();
         let request_name = name.clone();
@@ -90,19 +105,31 @@ impl BatchLookup {
             .get_or_try_insert_uuid(name, async move {
                 let (response, receiver) = oneshot::channel();
                 sender
-                    .send(PendingLookup {
+                    .try_send(PendingLookup {
                         name: request_name,
                         response,
                     })
-                    .await
-                    .map_err(|error| {
-                        warn!(%error, "could not queue Mojang lookup");
-                        UpstreamError::Transport
+                    .map_err(|error| match error {
+                        TrySendError::Full(_) => {
+                            warn!("rejecting Mojang lookup because the batch queue is full");
+                            UpstreamError::Overloaded
+                        }
+                        TrySendError::Closed(_) => {
+                            warn!("could not queue Mojang lookup because batching has stopped");
+                            UpstreamError::Transport
+                        }
                     })?;
-                receiver.await.map_err(|error| {
-                    warn!(%error, "Mojang lookup ended without a response");
-                    UpstreamError::Transport
-                })?
+                match timeout(LOOKUP_TIMEOUT, receiver).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(error)) => {
+                        warn!(%error, "Mojang lookup ended without a response");
+                        Err(UpstreamError::Transport)
+                    }
+                    Err(_) => {
+                        warn!("Mojang lookup did not finish before the deadline");
+                        Err(UpstreamError::Timeout)
+                    }
+                }
             })
             .await
             .map_err(|error| *error)?;
@@ -113,6 +140,12 @@ impl BatchLookup {
             self.metrics.increment_uuid_cache_misses();
         }
         Ok(result.into_value())
+    }
+
+    /// Reports whether the batch processor still accepts lookups.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        !self.sender.is_closed()
     }
 }
 
@@ -271,10 +304,14 @@ async fn spawn_batch(
     metrics: Arc<Metrics>,
     semaphore: Arc<Semaphore>,
 ) {
-    let Ok(permit) = semaphore.acquire_owned().await else {
-        reject_batch(batch, UpstreamError::Transport);
-        return;
-    };
+    #[expect(
+        clippy::expect_used,
+        reason = "The processor owns the semaphore and never closes it."
+    )]
+    let permit = semaphore
+        .acquire_owned()
+        .await
+        .expect("the batch semaphore is never closed");
     tasks.spawn(async move {
         let _permit = permit;
         process_batch(batch, service.as_ref(), &metrics).await;
@@ -321,10 +358,6 @@ async fn process_batch(
         )]
         let _ = response.send(Ok(uuid));
     }
-}
-
-fn reject_batch(batch: Vec<PendingLookup>, error: UpstreamError) {
-    reject_responses(batch.into_iter().map(|lookup| lookup.response), error);
 }
 
 fn reject_responses(
@@ -455,6 +488,10 @@ mod tests {
         assert!(matches!(
             BatchConfig::new(0, Duration::from_secs(1), 1, 1),
             Err(BatchConfigError::ZeroSize)
+        ));
+        assert!(matches!(
+            BatchConfig::new(11, Duration::from_secs(1), 1, 1),
+            Err(BatchConfigError::SizeTooLarge)
         ));
         assert!(matches!(
             BatchConfig::new(1, Duration::ZERO, 1, 1),
@@ -615,7 +652,7 @@ mod tests {
             CacheManager::new(32, Duration::from_mins(1))
                 .expect("test cache configuration should be valid"),
             Arc::new(Metrics::default()),
-            BatchConfig::new(1, Duration::from_secs(30), 2, 1)
+            BatchConfig::new(1, Duration::from_secs(30), 3, 1)
                 .expect("test batch configuration should be valid"),
         );
         let lookup = processor.lookup();
@@ -648,6 +685,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_lookups_when_the_queue_is_full() {
+        let service = Arc::new(BlockingMojangService::default());
+        let processor = BatchProcessor::start(
+            Arc::<BlockingMojangService>::clone(&service),
+            CacheManager::new(32, Duration::from_mins(1))
+                .expect("test cache configuration should be valid"),
+            Arc::new(Metrics::default()),
+            BatchConfig::new(1, Duration::from_secs(30), 1, 1)
+                .expect("test batch configuration should be valid"),
+        );
+        let lookup = processor.lookup();
+        let names = ["First", "Second", "Third", "Fourth", "Fifth"];
+        let requests = names.map(|name| {
+            let lookup = lookup.clone();
+            tokio::spawn(async move { lookup.lookup(name.to_owned()).await })
+        });
+
+        // At most one batch runs, one waits for a permit, and one waits in the queue.
+        service.release.add_permits(names.len());
+        let mut overloaded = 0;
+        for request in requests {
+            match request.await.expect("lookup task should finish") {
+                Ok(_) => {}
+                Err(UpstreamError::Overloaded) => overloaded += 1,
+                Err(error) => panic!("unexpected lookup error: {error}"),
+            }
+        }
+        assert!(overloaded >= 2, "only {overloaded} lookups were rejected");
+
+        drop(lookup);
+        processor.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn shutdown_closes_external_lookup_handles() {
         let processor = BatchProcessor::start(
             Arc::new(FakeMojangService::default()),
@@ -661,6 +732,10 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(250), processor.shutdown())
             .await
             .expect("shutdown should not wait for external lookup handles");
+        assert!(
+            !lookup.is_available(),
+            "lookups are unavailable after shutdown"
+        );
         assert_eq!(
             lookup.lookup("after-shutdown".to_owned()).await,
             Err(UpstreamError::Transport)
