@@ -89,7 +89,7 @@ impl Route {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct MojangEndpoints {
     batch_urls: Vec<Url>,
     profile_base_url: Url,

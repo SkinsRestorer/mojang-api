@@ -11,7 +11,7 @@ use crate::{
     types::{ErrorResponse, ErrorType},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum AppError {
     InvalidName,
     InvalidUuid,

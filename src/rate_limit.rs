@@ -56,7 +56,6 @@ struct RateLimiterState {
     last_cleanup: Instant,
 }
 
-#[derive(Debug, Clone, Copy)]
 struct Decision {
     allowed: bool,
     remaining: u32,
