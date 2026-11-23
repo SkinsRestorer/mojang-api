@@ -32,6 +32,8 @@ const RATE_LIMIT_SHARDS: usize = 32;
 const MAX_CLIENTS_PER_SHARD: usize = 4_096;
 /// Limits how often a full shard is scanned for expired clients.
 const MIN_FULL_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
+/// The number of clients a full shard inspects to choose one to evict.
+const EVICTION_SAMPLE_SIZE: usize = 8;
 
 /// The key that identifies a client, which the rate limit middleware adds to each request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,9 +59,75 @@ pub struct RateLimiter {
 
 #[derive(Debug)]
 struct RateLimiterState {
-    /// The theoretical arrival time of each client's next request.
-    clients: HashMap<IpAddr, Instant>,
+    clients: Clients,
     last_cleanup: Instant,
+}
+
+/// The theoretical arrival time of each client's next request.
+///
+/// Entries are stored densely, so a full shard can sample them by position in constant time.
+#[derive(Debug, Default)]
+struct Clients {
+    positions: HashMap<IpAddr, usize>,
+    entries: Vec<(IpAddr, Instant)>,
+}
+
+impl Clients {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn get(&self, key: IpAddr) -> Option<Instant> {
+        self.positions
+            .get(&key)
+            .map(|&position| self.entries[position].1)
+    }
+
+    fn insert(&mut self, key: IpAddr, arrival: Instant) {
+        if let Some(&position) = self.positions.get(&key) {
+            self.entries[position].1 = arrival;
+        } else {
+            self.positions.insert(key, self.entries.len());
+            self.entries.push((key, arrival));
+        }
+    }
+
+    fn remove_at(&mut self, position: usize) {
+        let (key, _) = self.entries.swap_remove(position);
+        self.positions.remove(&key);
+        if let Some(&(moved, _)) = self.entries.get(position) {
+            self.positions.insert(moved, position);
+        }
+    }
+
+    /// Removes clients whose quota is full again at `now`.
+    fn remove_expired(&mut self, now: Instant) {
+        self.entries.retain(|&(_, arrival)| arrival > now);
+        self.positions.clear();
+        self.positions.extend(
+            self.entries
+                .iter()
+                .enumerate()
+                .map(|(position, &(key, _))| (key, position)),
+        );
+    }
+
+    /// Evicts the client closest to a full quota among a few clients from `start` onward.
+    ///
+    /// Sampling keeps eviction constant time. Clients with a backlog survive unless every
+    /// sampled client has a larger one.
+    fn evict_sampled(&mut self, start: usize) {
+        let len = self.len();
+        if len == 0 {
+            return;
+        }
+        let victim = (0..EVICTION_SAMPLE_SIZE.min(len))
+            .map(|offset| (start + offset) % len)
+            .min_by_key(|&position| self.entries[position].1);
+        if let Some(position) = victim {
+            self.remove_at(position);
+        }
+    }
 }
 
 struct Decision {
@@ -99,7 +167,7 @@ impl RateLimiter {
             shards: (0..RATE_LIMIT_SHARDS)
                 .map(|_| {
                     Mutex::new(RateLimiterState {
-                        clients: HashMap::new(),
+                        clients: Clients::default(),
                         last_cleanup: now,
                     })
                 })
@@ -142,35 +210,34 @@ impl RateLimiter {
     }
 
     fn check(&self, key: IpAddr, now: Instant) -> Decision {
+        let hash = self.shard_hasher.hash_one(key);
         // Reduces the 64-bit hash before narrowing it, so 32-bit targets use every shard.
-        let shard_index =
-            usize::try_from(self.shard_hasher.hash_one(key) % RATE_LIMIT_SHARDS as u64)
-                .unwrap_or_default();
+        let shard_index = usize::try_from(hash % RATE_LIMIT_SHARDS as u64).unwrap_or_default();
         let mut state = self.shards[shard_index]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        let is_new = !state.clients.contains_key(&key);
+        let is_new = state.clients.get(key).is_none();
         let since_cleanup = now.saturating_duration_since(state.last_cleanup);
         let shard_full = is_new && state.clients.len() >= MAX_CLIENTS_PER_SHARD;
         if since_cleanup >= self.window
             || (shard_full && since_cleanup >= MIN_FULL_CLEANUP_INTERVAL)
         {
-            state.clients.retain(|_, arrival| *arrival > now);
+            state.clients.remove_expired(now);
             state.last_cleanup = now;
         }
-        if is_new
-            && state.clients.len() >= MAX_CLIENTS_PER_SHARD
-            && let Some(evicted) = state.clients.keys().next().copied()
-        {
-            // Evicting an arbitrary client keeps the shard bounded in constant time.
-            state.clients.remove(&evicted);
+        if is_new && state.clients.len() >= MAX_CLIENTS_PER_SHARD {
+            // The hash bits above the shard index are unpredictable to clients, so they pick
+            // a random sample without letting a client steer which entries are inspected.
+            let start =
+                usize::try_from(hash / RATE_LIMIT_SHARDS as u64 % MAX_CLIENTS_PER_SHARD as u64)
+                    .unwrap_or_default();
+            state.clients.evict_sampled(start);
         }
 
         let arrival = state
             .clients
-            .get(&key)
-            .copied()
+            .get(key)
             .map_or(now, |arrival| arrival.max(now));
         let backlog = arrival.saturating_duration_since(now);
         if backlog > self.burst_tolerance {
@@ -257,7 +324,12 @@ mod tests {
 
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{CF_CONNECTING_IP, MAX_CLIENTS_PER_SHARD, RateLimiter};
+    use std::hash::BuildHasher;
+
+    use super::{
+        CF_CONNECTING_IP, Clients, EVICTION_SAMPLE_SIZE, MAX_CLIENTS_PER_SHARD, RATE_LIMIT_SHARDS,
+        RateLimiter,
+    };
 
     fn limiter(limit: u32, window: Duration) -> RateLimiter {
         RateLimiter::new(
@@ -404,7 +476,7 @@ mod tests {
     fn bounds_memory_per_shard() {
         let limiter = limiter(1, Duration::from_hours(1));
         let now = Instant::now();
-        for index in 0..u32::try_from(MAX_CLIENTS_PER_SHARD * super::RATE_LIMIT_SHARDS * 2)
+        for index in 0..u32::try_from(MAX_CLIENTS_PER_SHARD * RATE_LIMIT_SHARDS * 2)
             .expect("test size should fit")
         {
             limiter.check(IpAddr::V4(Ipv4Addr::from_bits(index)), now);
@@ -417,5 +489,95 @@ mod tests {
                 .len();
             assert!(clients <= MAX_CLIENTS_PER_SHARD, "shard holds {clients}");
         }
+    }
+
+    /// Returns `count` distinct IPv4 clients that share a shard with `target`.
+    fn same_shard_clients(limiter: &RateLimiter, target: IpAddr, count: usize) -> Vec<IpAddr> {
+        let shard = limiter.shard_hasher.hash_one(target) % RATE_LIMIT_SHARDS as u64;
+        (1..u32::MAX)
+            .map(|index| IpAddr::V4(Ipv4Addr::from_bits(index)))
+            .filter(|&client| {
+                client != target
+                    && limiter.shard_hasher.hash_one(client) % RATE_LIMIT_SHARDS as u64 == shard
+            })
+            .take(count)
+            .collect()
+    }
+
+    #[test]
+    fn eviction_keeps_the_backlog_of_a_rate_limited_client() {
+        let limiter = limiter(2, Duration::from_mins(1));
+        let now = Instant::now();
+        let backlogged = address("203.0.113.9");
+        assert!(
+            limiter.check(backlogged, now).allowed,
+            "first request is allowed"
+        );
+        assert!(limiter.check(backlogged, now).allowed, "burst is allowed");
+        assert!(
+            !limiter.check(backlogged, now).allowed,
+            "client is rate limited"
+        );
+
+        // Fills the shard, then makes each original client be replaced twice over.
+        for client in same_shard_clients(&limiter, backlogged, MAX_CLIENTS_PER_SHARD * 3) {
+            assert!(limiter.check(client, now).allowed, "new client is allowed");
+        }
+
+        let decision = limiter.check(backlogged, now);
+        assert!(
+            !decision.allowed,
+            "the rate-limited client keeps its backlog"
+        );
+        assert_eq!(decision.retry_after, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn evicts_the_sampled_client_closest_to_a_full_quota() {
+        let now = Instant::now();
+        let mut clients = Clients::default();
+        let keys: Vec<IpAddr> = (0..u32::try_from(EVICTION_SAMPLE_SIZE * 2).expect("fits"))
+            .map(|index| IpAddr::V4(Ipv4Addr::from_bits(index)))
+            .collect();
+        for (offset, &key) in (1..).zip(&keys) {
+            clients.insert(key, now + Duration::from_secs(offset));
+        }
+        // Position 3 has the smallest arrival time in a sample that starts there.
+        clients.evict_sampled(3);
+        assert_eq!(clients.len(), keys.len() - 1);
+        assert_eq!(clients.get(keys[3]), None, "the closest client is evicted");
+        for (offset, &key) in (1..).zip(&keys) {
+            if key != keys[3] {
+                assert_eq!(
+                    clients.get(key),
+                    Some(now + Duration::from_secs(offset)),
+                    "other clients keep their state after the swap"
+                );
+            }
+        }
+
+        // A sample that wraps past the end still finds the smallest arrival time.
+        clients.evict_sampled(clients.len() - 2);
+        assert_eq!(
+            clients.get(keys[0]),
+            None,
+            "the wrapped sample reaches the front"
+        );
+    }
+
+    #[test]
+    fn removing_expired_clients_keeps_the_rest_reachable() {
+        let now = Instant::now();
+        let mut clients = Clients::default();
+        let expired = address("192.0.2.1");
+        let active = address("192.0.2.2");
+        clients.insert(expired, now);
+        clients.insert(active, now + Duration::from_secs(1));
+        clients.remove_expired(now);
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients.get(expired), None);
+        assert_eq!(clients.get(active), Some(now + Duration::from_secs(1)));
+        clients.insert(active, now + Duration::from_secs(2));
+        assert_eq!(clients.len(), 1, "updating a client does not add an entry");
     }
 }

@@ -161,7 +161,7 @@ Reqwest handles Mojang and Discord traffic with Rustls. Mojang requests use a 4-
 
 The timeouts fit the SkinsRestorer plugin, which stops waiting after 5 seconds. A skin lookup finishes or fails within the 5-second Mojang budget. A username lookup can also wait up to one second for its batch. The 7-second lookup deadline and the 8-second request deadline only catch work that is stuck, such as batches that wait for a free batch slot.
 
-The rate limiter uses the generic cell rate algorithm, so a client cannot send two bursts across a window boundary. It shards client state to reduce lock contention and caps the number of tracked clients.
+The rate limiter uses the generic cell rate algorithm, so a client cannot send two bursts across a window boundary. It shards client state to reduce lock contention and caps the number of tracked clients. When a shard is full, it samples a few clients and forgets the one closest to a full quota, so a rate-limited client rarely gets a fresh quota.
 
 The HTTP server closes connections that do not send complete request headers within 10 seconds, accepts at most 4,096 connections at a time, and ends requests that run longer than 8 seconds.
 
