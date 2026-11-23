@@ -28,6 +28,14 @@ pub enum ErrorType {
     InvalidUuid,
     InternalTimeout,
     InternalError,
+    /// Mojang rate-limited this service or the service is at capacity. Retry after `Retry-After`.
+    ServiceUnavailable,
+    /// Mojang returned an unexpected HTTP status.
+    UpstreamError,
+    /// The client exceeded this service's rate limit. Retry after `Retry-After`.
+    RateLimited,
+    NotFound,
+    MethodNotAllowed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -51,7 +59,8 @@ pub(crate) struct MojangProfile {
 pub(crate) struct MojangProperty {
     pub name: String,
     pub value: String,
-    pub signature: String,
+    /// Mojang signs `textures`; other properties may be unsigned.
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

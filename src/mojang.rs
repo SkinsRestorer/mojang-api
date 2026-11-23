@@ -4,23 +4,28 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use rand::seq::IndexedRandom;
 use reqwest::{
-    Client, Proxy, StatusCode, Url,
-    header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
+    Client, Proxy, RequestBuilder, StatusCode, Url,
+    header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER},
 };
 use thiserror::Error;
+use tokio::sync::Semaphore;
 use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{
     config::MojangEndpoints,
+    error::ErrorChain,
     http_client::http_client_builder,
     metrics::Metrics,
     types::{MojangBatchProfile, MojangProfile, SkinProperty},
@@ -28,11 +33,21 @@ use crate::{
 };
 
 const MAX_UPSTREAM_RESPONSE_BYTES: usize = 1024 * 1024;
+/// Limits concurrent session server requests, so random UUIDs cannot flood Mojang.
+const MAX_CONCURRENT_SKIN_LOOKUPS: usize = 64;
+const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30);
+const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_mins(10);
+/// A rate-limited request is retried once through another outbound route.
+const MAX_ATTEMPTS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum UpstreamError {
     #[error("the Mojang request timed out")]
     Timeout,
+    #[error("Mojang rate-limited every outbound route")]
+    RateLimited { retry_after: Duration },
+    #[error("too many Mojang requests are already in progress")]
+    Overloaded,
     #[error("Mojang returned HTTP {0}")]
     HttpStatus(u16),
     #[error("the Mojang request failed")]
@@ -48,24 +63,67 @@ pub trait MojangService: Send + Sync {
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError>;
 }
 
-#[derive(Debug, Clone)]
-pub struct MojangHttpClient {
+/// Mojang rate-limits each API separately, so cooldowns are tracked per API.
+#[derive(Debug, Clone, Copy)]
+enum Api {
+    Batch,
+    Profile,
+}
+
+/// One outbound path to Mojang: a direct connection or a single proxy.
+///
+/// Each route has its own client because pooled connections stay bound to the proxy that
+/// opened them.
+#[derive(Debug)]
+struct Route {
     client: Client,
+    /// For each API, milliseconds after `MojangHttpClient::epoch` until the route may be used.
+    cooldown_until: [AtomicU64; 2],
+}
+
+impl Route {
+    const fn cooldown(&self, api: Api) -> &AtomicU64 {
+        match api {
+            Api::Batch => &self.cooldown_until[0],
+            Api::Profile => &self.cooldown_until[1],
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MojangHttpClient {
+    routes: Vec<Route>,
+    epoch: Instant,
     endpoints: MojangEndpoints,
     metrics: Arc<Metrics>,
+    skin_lookups: Semaphore,
 }
 
 impl MojangHttpClient {
-    /// Creates the shared Mojang HTTP client and loads any configured proxies.
+    /// Creates the Mojang HTTP clients and loads any configured proxies.
     ///
     /// # Errors
     ///
-    /// Returns an error when the proxy list cannot be read or the HTTP client cannot be built.
+    /// Returns an error when the proxy list cannot be read or an HTTP client cannot be built.
     pub fn new(
         endpoints: MojangEndpoints,
         proxy_list_file: Option<&Path>,
         timeout: Duration,
         metrics: Arc<Metrics>,
+    ) -> Result<Self, ClientBuildError> {
+        let proxies = proxy_list_file
+            .map(load_proxy_list)
+            .transpose()?
+            .unwrap_or_default();
+        Self::build(endpoints, &proxies, timeout, metrics, true)
+    }
+
+    fn build(
+        endpoints: MojangEndpoints,
+        proxies: &[Url],
+        timeout: Duration,
+        metrics: Arc<Metrics>,
+        https_only: bool,
     ) -> Result<Self, ClientBuildError> {
         if endpoints.batch_urls.is_empty() {
             return Err(ClientBuildError::NoBatchEndpoints);
@@ -74,49 +132,125 @@ impl MojangHttpClient {
         let mut default_headers = HeaderMap::new();
         default_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         default_headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en"));
-        default_headers.insert(USER_AGENT, HeaderValue::from_static("SRMojangAPI"));
+        let builder = || {
+            http_client_builder(timeout)
+                .default_headers(default_headers.clone())
+                .https_only(https_only)
+        };
+        let route = |client| Route {
+            client,
+            cooldown_until: [AtomicU64::new(0), AtomicU64::new(0)],
+        };
 
-        let proxies = proxy_list_file
-            .map(load_proxy_list)
-            .transpose()?
-            .unwrap_or_default();
-        let mut builder = http_client_builder(timeout)
-            .default_headers(default_headers)
-            .https_only(true);
-
-        if !proxies.is_empty() {
-            let proxies = Arc::new(proxies);
-            let proxy_count = proxies.len();
-            builder = builder.proxy(Proxy::custom(move |_| {
-                proxies.choose(&mut rand::rng()).cloned()
-            }));
-            tracing::info!(proxy_count, "loaded outbound proxies");
-        }
+        let routes = if proxies.is_empty() {
+            vec![route(builder().build()?)]
+        } else {
+            let routes = proxies
+                .iter()
+                .map(|proxy| Ok(route(builder().proxy(Proxy::all(proxy.clone())?).build()?)))
+                .collect::<Result<Vec<_>, ClientBuildError>>()?;
+            tracing::info!(proxy_count = routes.len(), "loaded outbound proxies");
+            routes
+        };
 
         Ok(Self {
-            client: builder.build()?,
+            routes,
+            epoch: Instant::now(),
             endpoints,
             metrics,
+            skin_lookups: Semaphore::new(MAX_CONCURRENT_SKIN_LOOKUPS),
         })
     }
 
+    fn now_millis(&self) -> u64 {
+        u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// Picks a random route that Mojang has not rate-limited for `api`.
+    fn choose_route(&self, api: Api) -> Result<&Route, UpstreamError> {
+        let now = self.now_millis();
+        let start = rand::random_range(0..self.routes.len());
+        self.routes
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(self.routes.len())
+            .find(|route| route.cooldown(api).load(Ordering::Relaxed) <= now)
+            .ok_or_else(|| {
+                let available_at = self
+                    .routes
+                    .iter()
+                    .map(|route| route.cooldown(api).load(Ordering::Relaxed))
+                    .min()
+                    .unwrap_or(now);
+                UpstreamError::RateLimited {
+                    retry_after: Duration::from_millis(available_at.saturating_sub(now)),
+                }
+            })
+    }
+
+    async fn request(
+        &self,
+        api: Api,
+        sent_bytes: usize,
+        build: impl Fn(&Client) -> RequestBuilder,
+    ) -> Result<(StatusCode, Bytes), UpstreamError> {
+        let route = self.choose_route(api)?;
+        let mut result = self
+            .send(route, api, build(&route.client), sent_bytes)
+            .await;
+        for _ in 1..MAX_ATTEMPTS {
+            if !matches!(result, Err(UpstreamError::RateLimited { .. })) {
+                break;
+            }
+            let Ok(route) = self.choose_route(api) else {
+                break;
+            };
+            result = self
+                .send(route, api, build(&route.client), sent_bytes)
+                .await;
+        }
+        result
+    }
+
+    /// Sends a request and reads the body of successful responses.
+    ///
+    /// Unsuccessful responses return their status with an empty body.
     async fn send(
         &self,
-        request: reqwest::RequestBuilder,
+        route: &Route,
+        api: Api,
+        request: RequestBuilder,
         sent_bytes: usize,
     ) -> Result<(StatusCode, Bytes), UpstreamError> {
         self.metrics.record_mojang_request(sent_bytes);
 
-        let mut response = request.send().await.map_err(|error| {
-            self.metrics.increment_mojang_errors();
-            if error.is_timeout() {
-                UpstreamError::Timeout
-            } else {
-                tracing::error!(%error, "Mojang request failed");
-                UpstreamError::Transport
-            }
-        })?;
+        let mut response = request
+            .send()
+            .await
+            .map_err(|error| self.record_transport_error(&error, "Mojang request failed"))?;
         let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse().ok())
+                .map_or(DEFAULT_RATE_LIMIT_COOLDOWN, Duration::from_secs)
+                .clamp(Duration::from_secs(1), MAX_RATE_LIMIT_COOLDOWN);
+            let available_at = self
+                .now_millis()
+                .saturating_add(u64::try_from(retry_after.as_millis()).unwrap_or(u64::MAX));
+            route
+                .cooldown(api)
+                .fetch_max(available_at, Ordering::Relaxed);
+            self.metrics.increment_mojang_errors();
+            warn!(?api, ?retry_after, "Mojang rate-limited an outbound route");
+            return Err(UpstreamError::RateLimited { retry_after });
+        }
+        if !status.is_success() {
+            return Ok((status, Bytes::new()));
+        }
         if response
             .content_length()
             .is_some_and(|length| length > MAX_UPSTREAM_RESPONSE_BYTES as u64)
@@ -132,18 +266,15 @@ impl MojangHttpClient {
         let mut body = BytesMut::with_capacity(initial_capacity);
         loop {
             let chunk = response.chunk().await.map_err(|error| {
-                self.metrics.increment_mojang_errors();
-                if error.is_timeout() {
-                    UpstreamError::Timeout
-                } else {
-                    tracing::error!(%error, "failed to read Mojang response");
-                    UpstreamError::Transport
-                }
+                self.metrics.record_mojang_response(body.len());
+                self.record_transport_error(&error, "failed to read Mojang response")
             })?;
             let Some(chunk) = chunk else {
                 break;
             };
             if !try_extend_body(&mut body, &chunk, MAX_UPSTREAM_RESPONSE_BYTES) {
+                self.metrics
+                    .record_mojang_response(body.len().saturating_add(chunk.len()));
                 return Err(self.record_invalid_response("Mojang response exceeded the size limit"));
             }
         }
@@ -152,9 +283,20 @@ impl MojangHttpClient {
         Ok((status, body.freeze()))
     }
 
+    fn record_transport_error(&self, error: &reqwest::Error, message: &str) -> UpstreamError {
+        self.metrics.increment_mojang_errors();
+        if error.is_timeout() {
+            warn!(error = %ErrorChain(error), "{message}");
+            UpstreamError::Timeout
+        } else {
+            error!(error = %ErrorChain(error), "{message}");
+            UpstreamError::Transport
+        }
+    }
+
     fn record_status_error(&self, status: StatusCode) -> UpstreamError {
         self.metrics.increment_mojang_errors();
-        error!(%status, "Mojang returned an unsuccessful response");
+        warn!(%status, "Mojang returned an unsuccessful response");
         UpstreamError::HttpStatus(status.as_u16())
     }
 
@@ -168,20 +310,23 @@ impl MojangHttpClient {
 #[async_trait]
 impl MojangService for MojangHttpClient {
     async fn lookup_names(&self, names: &[String]) -> Result<Vec<(String, Uuid)>, UpstreamError> {
-        let body =
-            serde_json::to_vec(names).map_err(|error| self.record_invalid_response(error))?;
+        let body = Bytes::from(
+            serde_json::to_vec(names).map_err(|error| self.record_invalid_response(error))?,
+        );
         let sent_bytes = body.len();
         let endpoint = self
             .endpoints
             .batch_urls
             .choose(&mut rand::rng())
             .ok_or_else(|| self.record_invalid_response("no Mojang batch endpoint is available"))?;
-        let request = self
-            .client
-            .post(endpoint.clone())
-            .header(CONTENT_TYPE, "application/json")
-            .body(body);
-        let (status, response_body) = self.send(request, sent_bytes).await?;
+        let (status, response_body) = self
+            .request(Api::Batch, sent_bytes, |client| {
+                client
+                    .post(endpoint.clone())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.clone())
+            })
+            .await?;
 
         if !status.is_success() {
             return Err(self.record_status_error(status));
@@ -189,19 +334,24 @@ impl MojangService for MojangHttpClient {
 
         let profiles: Vec<MojangBatchProfile> = serde_json::from_slice(&response_body)
             .map_err(|error| self.record_invalid_response(error))?;
-        profiles
+        // One malformed entry should not fail the lookups of every other name in the batch.
+        Ok(profiles
             .into_iter()
-            .map(|profile| {
-                parse_minecraft_uuid(&profile.id)
-                    .map(|uuid| (profile.name, uuid))
-                    .ok_or_else(|| {
-                        self.record_invalid_response("profile contained an invalid UUID")
-                    })
+            .filter_map(|profile| {
+                let uuid = parse_minecraft_uuid(&profile.id);
+                if uuid.is_none() {
+                    warn!(id = %profile.id, "ignoring Mojang profile with an invalid UUID");
+                }
+                uuid.map(|uuid| (profile.name, uuid))
             })
-            .collect()
+            .collect())
     }
 
     async fn lookup_skin(&self, uuid: Uuid) -> Result<Option<SkinProperty>, UpstreamError> {
+        let Ok(_permit) = self.skin_lookups.try_acquire() else {
+            warn!("rejecting skin lookup because too many are in progress");
+            return Err(UpstreamError::Overloaded);
+        };
         let compact_uuid = uuid.simple().to_string();
         let mut endpoint = self
             .endpoints
@@ -210,8 +360,10 @@ impl MojangService for MojangHttpClient {
             .map_err(|error| self.record_invalid_response(error))?;
         endpoint.set_query(Some("unsigned=false"));
 
-        let (status, response_body) = self.send(self.client.get(endpoint), 0).await?;
-        if status == StatusCode::NO_CONTENT {
+        let (status, response_body) = self
+            .request(Api::Profile, 0, |client| client.get(endpoint.clone()))
+            .await?;
+        if matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_FOUND) {
             return Ok(None);
         }
         if !status.is_success() {
@@ -220,14 +372,20 @@ impl MojangService for MojangHttpClient {
 
         let profile: MojangProfile = serde_json::from_slice(&response_body)
             .map_err(|error| self.record_invalid_response(error))?;
-        Ok(profile
+        let Some(textures) = profile
             .properties
             .into_iter()
             .find(|property| property.name == "textures")
-            .map(|property| SkinProperty {
-                value: property.value,
-                signature: property.signature,
-            }))
+        else {
+            return Ok(None);
+        };
+        let signature = textures
+            .signature
+            .ok_or_else(|| self.record_invalid_response("textures property is not signed"))?;
+        Ok(Some(SkinProperty {
+            value: textures.value,
+            signature,
+        }))
     }
 }
 
@@ -248,19 +406,10 @@ fn load_proxy_list(path: &Path) -> Result<Vec<Url>, ClientBuildError> {
         clippy::disallowed_methods,
         reason = "The application loads the proxy list during synchronous startup before starting Tokio."
     )]
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            warn!(path = %path.display(), "proxy list file does not exist; using direct connections");
-            return Ok(Vec::new());
-        }
-        Err(error) => {
-            return Err(ClientBuildError::ReadProxyList {
-                path: path.to_path_buf(),
-                source: error,
-            });
-        }
-    };
+    let content = fs::read_to_string(path).map_err(|error| ClientBuildError::ReadProxyList {
+        path: path.to_path_buf(),
+        source: error,
+    })?;
 
     let mut proxies = Vec::new();
     let mut seen = HashSet::new();
@@ -282,6 +431,9 @@ fn load_proxy_list(path: &Path) -> Result<Vec<Url>, ClientBuildError> {
                 );
             }
         }
+    }
+    if proxies.is_empty() {
+        warn!(path = %path.display(), "proxy list has no valid entries; using direct connections");
     }
     Ok(proxies)
 }
@@ -315,7 +467,7 @@ fn parse_proxy_url(value: &str) -> Result<Url, ProxyParseError> {
 pub enum ClientBuildError {
     #[error("at least one Mojang batch endpoint is required")]
     NoBatchEndpoints,
-    #[error("could not build the Mojang HTTP client")]
+    #[error("could not build a Mojang HTTP client")]
     Build(#[from] reqwest::Error),
     #[error("could not read proxy list {path}")]
     ReadProxyList {
@@ -339,9 +491,170 @@ enum ProxyParseError {
 
 #[cfg(test)]
 mod tests {
-    use bytes::BytesMut;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
-    use super::{ProxyParseError, parse_proxy_url, try_extend_body};
+    use axum::{
+        Json, Router,
+        extract::{Path, State},
+        http::{StatusCode, header::RETRY_AFTER},
+        response::{IntoResponse, Response},
+        routing::{get, post},
+    };
+    use bytes::BytesMut;
+    use reqwest::Url;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use crate::{config::MojangEndpoints, metrics::Metrics, types::SkinProperty};
+
+    use super::{
+        MojangHttpClient, MojangService, ProxyParseError, UpstreamError, parse_proxy_url,
+        try_extend_body,
+    };
+
+    const PLAYER: &str = "b1ae07784817436c96a3a72c67cda060";
+    const MISSING: &str = "00000000000000000000000000000204";
+    const DELETED: &str = "00000000000000000000000000000404";
+    const BROKEN: &str = "00000000000000000000000000000500";
+    const UNSIGNED: &str = "000000000000000000000000000000aa";
+
+    async fn profile(Path(uuid): Path<String>) -> Response {
+        match uuid.as_str() {
+            PLAYER => Json(json!({
+                "id": PLAYER,
+                "name": "Pistonmaster",
+                "properties": [
+                    { "name": "extra", "value": "unsigned" },
+                    { "name": "textures", "value": "texture", "signature": "signature" }
+                ]
+            }))
+            .into_response(),
+            MISSING => StatusCode::NO_CONTENT.into_response(),
+            DELETED => StatusCode::NOT_FOUND.into_response(),
+            UNSIGNED => Json(json!({
+                "id": UNSIGNED,
+                "properties": [{ "name": "textures", "value": "texture" }]
+            }))
+            .into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+
+    async fn bulk() -> Json<serde_json::Value> {
+        Json(json!([
+            { "id": PLAYER, "name": "Pistonmaster" },
+            { "id": "not-a-uuid", "name": "Broken" }
+        ]))
+    }
+
+    async fn rate_limited(State(hits): State<Arc<AtomicUsize>>) -> Response {
+        hits.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::TOO_MANY_REQUESTS, [(RETRY_AFTER, "120")]).into_response()
+    }
+
+    async fn fixture(router: Router) -> MojangHttpClient {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fixture listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("fixture should have an address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("fixture server should run");
+        });
+        let base = format!("http://{address}");
+        MojangHttpClient::build(
+            MojangEndpoints {
+                batch_urls: vec![Url::parse(&format!("{base}/bulk")).expect("URL should parse")],
+                profile_base_url: Url::parse(&format!("{base}/profile/"))
+                    .expect("URL should parse"),
+            },
+            &[],
+            Duration::from_secs(5),
+            Arc::new(Metrics::default()),
+            false,
+        )
+        .expect("fixture client should build")
+    }
+
+    fn uuid(value: &str) -> Uuid {
+        Uuid::parse_str(value).expect("test UUID should parse")
+    }
+
+    #[tokio::test]
+    async fn reads_skins_and_missing_profiles() {
+        let client = fixture(
+            Router::new()
+                .route("/profile/{uuid}", get(profile))
+                .route("/bulk", post(bulk)),
+        )
+        .await;
+
+        assert_eq!(
+            client.lookup_skin(uuid(PLAYER)).await,
+            Ok(Some(SkinProperty {
+                value: "texture".to_owned(),
+                signature: "signature".to_owned(),
+            }))
+        );
+        assert_eq!(client.lookup_skin(uuid(MISSING)).await, Ok(None));
+        assert_eq!(client.lookup_skin(uuid(DELETED)).await, Ok(None));
+        assert_eq!(
+            client.lookup_skin(uuid(BROKEN)).await,
+            Err(UpstreamError::HttpStatus(500))
+        );
+        assert_eq!(
+            client.lookup_skin(uuid(UNSIGNED)).await,
+            Err(UpstreamError::InvalidResponse)
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_invalid_profiles_in_a_batch() {
+        let client = fixture(Router::new().route("/bulk", post(bulk))).await;
+
+        assert_eq!(
+            client
+                .lookup_names(&["pistonmaster".to_owned(), "broken".to_owned()])
+                .await,
+            Ok(vec![("Pistonmaster".to_owned(), uuid(PLAYER))])
+        );
+    }
+
+    #[tokio::test]
+    async fn backs_off_after_mojang_rate_limits_a_route() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let client = fixture(
+            Router::new()
+                .route("/profile/{uuid}", get(rate_limited))
+                .with_state(Arc::clone(&hits)),
+        )
+        .await;
+
+        assert_eq!(
+            client.lookup_skin(uuid(PLAYER)).await,
+            Err(UpstreamError::RateLimited {
+                retry_after: Duration::from_secs(120)
+            })
+        );
+        assert!(
+            matches!(
+                client.lookup_skin(uuid(PLAYER)).await,
+                Err(UpstreamError::RateLimited { retry_after })
+                    if retry_after > Duration::from_secs(100)
+            ),
+            "the cooldown should short-circuit later requests"
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn enforces_response_body_size_while_accumulating_chunks() {
