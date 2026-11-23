@@ -15,12 +15,11 @@ axum = { version = "0.8.9", default-features = false, features = [
 ] }
 bytes = "1.12.1"
 dotenvy = "0.15.7"
+getrandom = "0.4.3"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["server-graceful", "tokio"] }
 ipnet = "2.12.0"
-jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 moka = { version = "0.12.15", features = ["future"] }
-rand = "0.10.2"
 reqwest = { version = "0.13.4", default-features = false, features = [
   "brotli",
   "deflate",
@@ -78,7 +77,6 @@ missing_const_for_fn = "allow"
 option_if_let_else = "allow"
 future_not_send = "allow"
 redundant_pub_crate = "allow"
-suboptimal_flops = "allow"
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"

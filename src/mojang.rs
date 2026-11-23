@@ -13,7 +13,6 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use rand::seq::IndexedRandom;
 use reqwest::{
     Client, Proxy, RequestBuilder, StatusCode, Url,
     header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER},
@@ -192,7 +191,7 @@ impl MojangHttpClient {
     /// Picks a random route that Mojang has not rate-limited for `api`.
     fn choose_route(&self, api: Api) -> Result<&Route, UpstreamError> {
         let now = self.now_millis();
-        let start = rand::random_range(0..self.routes.len());
+        let start = random_index(self.routes.len());
         self.routes
             .iter()
             .cycle()
@@ -340,7 +339,7 @@ impl MojangService for MojangHttpClient {
         let endpoint = self
             .endpoints
             .batch_urls
-            .choose(&mut rand::rng())
+            .get(random_index(self.endpoints.batch_urls.len()))
             .ok_or_else(|| self.record_invalid_response("no Mojang batch endpoint is available"))?;
         let (status, response_body) = self
             .request(Api::Batch, sent_bytes, |client| {
@@ -410,6 +409,17 @@ impl MojangService for MojangHttpClient {
             signature,
         }))
     }
+}
+
+/// Returns a random index below `len`, or 0 when `len` is 0 or the OS has no randomness.
+///
+/// The modulo bias does not matter for the few routes and endpoints this picks from.
+fn random_index(len: usize) -> usize {
+    let mut bytes = [0; size_of::<usize>()];
+    if getrandom::fill(&mut bytes).is_err() {
+        return 0;
+    }
+    usize::from_ne_bytes(bytes).checked_rem(len).unwrap_or(0)
 }
 
 fn try_extend_body(body: &mut BytesMut, chunk: &[u8], limit: usize) -> bool {

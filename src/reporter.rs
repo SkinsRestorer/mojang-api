@@ -1,7 +1,7 @@
 use std::{
     fs,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use reqwest::Url;
@@ -241,7 +241,7 @@ fn build_report(snapshot: MetricsSnapshot, report_period: Duration) -> serde_jso
                     "inline": true
                 }
             ],
-            "timestamp": jiff::Timestamp::now().to_string(),
+            "timestamp": format_utc_timestamp(SystemTime::now()),
             "footer": { "text": format!("SRMojangAPI v{}", env!("CARGO_PKG_VERSION")) }
         }]
     })
@@ -284,6 +284,36 @@ fn format_duration(duration: Duration) -> String {
 fn format_report_period(duration: Duration) -> String {
     let minutes = duration.as_secs().div_ceil(60);
     format!("{minutes}min")
+}
+
+/// Formats `time` as an RFC 3339 UTC timestamp with whole seconds, such as
+/// `2024-02-29T23:59:59Z`.
+fn format_utc_timestamp(time: SystemTime) -> String {
+    let seconds = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.as_secs());
+    // Converts days since 1970-01-01 to a civil date with Howard Hinnant's
+    // `civil_from_days` algorithm, shifted so that years start on March 1.
+    let days = seconds / 86_400 + 719_468;
+    let era = days / 146_097;
+    let day_of_era = days % 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = era * 400 + year_of_era + u64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        seconds % 86_400 / 3_600,
+        seconds % 3_600 / 60,
+        seconds % 60
+    )
 }
 
 fn format_number(number: u64) -> String {
@@ -343,7 +373,7 @@ fn load_average() -> Option<String> {
 mod tests {
     use std::{
         sync::{Arc, Mutex},
-        time::Duration,
+        time::{Duration, SystemTime},
     };
 
     use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
@@ -352,7 +382,7 @@ mod tests {
 
     use super::{
         DiscordReporter, build_report, format_bytes, format_duration, format_number,
-        format_report_period,
+        format_report_period, format_utc_timestamp,
     };
     use crate::{
         http_client::http_client_builder,
@@ -408,6 +438,19 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(90_061)), "1d 1h 1m 1s");
         assert_eq!(format_report_period(Duration::from_secs(301)), "6min");
         assert_eq!(format_number(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn formats_utc_timestamps() {
+        for (seconds, expected) in [
+            (0, "1970-01-01T00:00:00Z"),
+            (951_782_400, "2000-02-29T00:00:00Z"),
+            (1_709_251_199, "2024-02-29T23:59:59Z"),
+            (4_102_444_800, "2100-01-01T00:00:00Z"),
+        ] {
+            let time = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+            assert_eq!(format_utc_timestamp(time), expected, "{seconds} seconds");
+        }
     }
 
     /// Fails the first webhook call and accepts later ones, recording each report's request
