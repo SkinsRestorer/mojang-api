@@ -1,5 +1,5 @@
 # Keep the Rust version equal to rust-toolchain.toml, or rustup downloads it during the build.
-FROM docker.io/library/rust:1.100.0-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS build
+FROM docker.io/library/rust:1.100.0-slim-trixie@sha256:51fdc80ccc3fb83bf14481f2cd8d0d11703eeb9f416ab47476c32a793a822307 AS build
 WORKDIR /app
 COPY . .
 RUN cargo build --release --locked
