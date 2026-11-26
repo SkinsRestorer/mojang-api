@@ -4,7 +4,7 @@ WORKDIR /app
 COPY . .
 RUN cargo build --release --locked
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:29ee70762214fe8190cea04ef1c0a84a8365879e047ce8f911ae5a5ab2355fa2
 COPY --from=build /app/target/release/mojang-api /usr/local/bin/mojang-api
 EXPOSE 3000
 # The image has no shell or curl, so the binary checks its own /health endpoint.
